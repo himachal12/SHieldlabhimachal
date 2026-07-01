@@ -67,8 +67,6 @@ class CodeScanRequest(BaseModel):
 class WebScanRequest(BaseModel):
     """
     Request to scan a web application.
-
-    Day 7:
     Supports both passive and active scan modes.
     Active mode requires explicit user consent.
     """
@@ -126,6 +124,44 @@ class AnalyzeRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "scan_id": "scan_abc123"
+            }
+        }
+
+
+class CombinedScanRequest(BaseModel):
+    """
+    Request for the full ShieldLabs flagship scan:
+    code repository + web domain + cross-domain attack chain analysis.
+    This is the most powerful endpoint -- runs everything together.
+    """
+
+    repo_url: HttpUrl = Field(
+        ...,
+        description="GitHub repository URL to scan for code vulnerabilities"
+    )
+
+    domain: str = Field(
+        ...,
+        description="Domain to scan for web vulnerabilities (e.g. yourapp.com)"
+    )
+
+    scan_mode: ScanMode = Field(
+        default=ScanMode.PASSIVE,
+        description="passive (safe default) or active (sqlmap SQLi testing, requires consent)"
+    )
+
+    consent_confirmed: bool = Field(
+        default=False,
+        description="Must be True to enable active scan mode."
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "repo_url": "https://github.com/yourorg/yourapp",
+                "domain": "yourapp.com",
+                "scan_mode": "passive",
+                "consent_confirmed": False
             }
         }
 
