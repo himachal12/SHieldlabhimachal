@@ -41,7 +41,7 @@ print("=" * 70)
 
 # Use a small, known-vulnerable public repo
 r = requests.post(f"{BASE_URL}/api/scan/code", json={
-    "repo_url": "https://github.com/OWASP/WebGoat",
+    "repo_url": "https://github.com/himachal12/SHIELDLAB_DEMO_VULNERABLE",
     "scan_type": "code"
 })
 print(f"Response: {r.json()}")
