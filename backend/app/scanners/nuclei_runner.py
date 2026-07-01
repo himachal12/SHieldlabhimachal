@@ -67,7 +67,6 @@ def run_nuclei(target: str, timeout: int = 300) -> list[dict]:
                 "-rate-limit", "50",     # requests/sec
                 "-no-interactsh",        # disable OOB server connection
                 "-duc",                  # disable update check
-                "-stats-json",           # output progress stats
             ],
             capture_output=True,
             text=True,
