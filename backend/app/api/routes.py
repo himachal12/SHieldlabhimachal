@@ -233,6 +233,7 @@ async def get_results(scan_id: str, db: Session = Depends(get_db)):
         scan_id=scan.scan_id,
         status=scan.status,
         scan_type=scan.scan_type,
+        repo_url=scan.repo_url, 
         total_findings=scan.total_findings,
         critical_count=scan.critical_count,
         high_count=scan.high_count,
@@ -249,3 +250,79 @@ async def get_results(scan_id: str, db: Session = Depends(get_db)):
 @router.get("/api/health")
 async def health():
     return {"status": "ok", "version": "1.0.0"}
+
+
+# ──────────────────────────────────────────────
+# AUTO-PR ENDPOINT
+# ──────────────────────────────────────────────
+
+@router.post("/pr/create", response_model=schemas.PRResult)
+async def create_fix_pr(
+    request: schemas.CreatePRRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Create a GitHub Pull Request with AI-generated fixes applied.
+
+    Finds all eligible findings from the scan (code findings with
+    file_path + vulnerable_code + fixed_code), applies them to the
+    repository, and opens a PR for developer review.
+
+    This runs synchronously (not background task) because it typically
+    finishes in under 60 seconds — no polling needed.
+    """
+    # Verify scan exists and is completed
+    scan = crud.get_scan(db, request.scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    if scan.status != "completed":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Scan is not completed yet (status: {scan.status}). "
+                   "Wait for scan to complete before creating a PR."
+        )
+
+    # Get findings from database
+    raw_findings = crud.get_findings_by_scan(db, request.scan_id)
+
+    # Convert SQLAlchemy objects to dicts for the auto_pr module
+    findings_dicts = []
+    for f in raw_findings:
+        findings_dicts.append({
+            "finding_id": f.finding_id,
+            "vuln_type": f.vuln_type,
+            "severity": f.severity,
+            "cvss_score": f.cvss_score,
+            "file_path": f.file_path,
+            "line_number": f.line_number,
+            "vulnerable_code": f.vulnerable_code,
+            "fixed_code": f.fixed_code,
+            "fix_explanation": f.fix_explanation,
+            "is_false_positive": f.is_false_positive,
+            "source": "bandit"  # default for code findings
+        })
+
+    if not findings_dicts:
+        raise HTTPException(
+            status_code=400,
+            detail="No findings found for this scan. "
+                   "Make sure this was a code scan with results."
+        )
+
+    # Run the auto-PR engine
+    from app.agents.auto_pr import create_fix_pr as _create_pr
+
+    logger.info(
+        f"Creating auto-PR for scan {request.scan_id} "
+        f"on {request.repo_url}"
+    )
+
+    result = _create_pr(
+        github_token=request.github_token,
+        repo_url=str(request.repo_url),
+        scan_id=request.scan_id,
+        findings=findings_dicts
+    )
+
+    return schemas.PRResult(**result)

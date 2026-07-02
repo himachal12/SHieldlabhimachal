@@ -1,0 +1,493 @@
+"""
+Auto-PR Agent
+=============
+Takes completed scan findings that have AI-generated fixes,
+applies them to the actual GitHub repository, and opens a
+Pull Request so the developer just has to click "Merge."
+
+Key design decisions:
+1. EXACT text matching only — no fuzzy matching. If the
+   vulnerable code isn't found exactly, we skip that fix
+   and report it honestly. Wrong fix in wrong place is
+   worse than no fix.
+
+2. Only touches CODE findings — web findings (missing headers,
+   open ports) have no code to change in a repo.
+
+3. Groups fixes by file — if 3 vulns are in app.py, we
+   open app.py once, apply all 3 fixes, save once. Not 3
+   separate file operations.
+
+4. Fresh clone — we re-download the repo to ensure we're
+   working on current code, not whatever was scanned earlier.
+
+5. Token is caller-provided — never stored in our DB.
+   It's the developer's token for their repo.
+"""
+
+import os
+import uuid
+import shutil
+import tempfile
+from github import Github, GithubException
+from app.utils.logger import get_logger
+
+logger = get_logger("auto_pr")
+
+
+# ────────────────────────────────────────────────
+# ELIGIBILITY FILTER
+# ────────────────────────────────────────────────
+
+def get_eligible_findings(findings: list[dict]) -> list[dict]:
+    """
+    Filter findings that qualify for auto-fix.
+
+    A finding qualifies only if it has ALL of:
+    - file_path (we know which file to edit)
+    - line_number (we know roughly where)
+    - vulnerable_code (exact text to find and replace)
+    - fixed_code (what to replace it with)
+    - NOT a web-sourced finding (nmap, nuclei, etc.)
+
+    Returns the filtered list with a reason for each exclusion logged.
+    """
+    WEB_SOURCES = {
+        "nmap", "ssl_analyzer", "headers_checker",
+        "nuclei", "exposed_files_checker", "sqlmap_active"
+    }
+
+    eligible = []
+    skipped = []
+
+    for f in findings:
+        reason = None
+
+        if f.get("source") in WEB_SOURCES:
+            reason = "web finding — no code to patch"
+        elif not f.get("file_path"):
+            reason = "no file_path"
+        elif not f.get("vulnerable_code"):
+            reason = "no vulnerable_code snippet stored"
+        elif not f.get("fixed_code"):
+            reason = "no fixed_code generated (architectural finding)"
+        elif f.get("is_false_positive"):
+            reason = "marked as false positive"
+
+        if reason:
+            skipped.append({
+                "vuln_type": f.get("vuln_type"),
+                "reason": reason
+            })
+        else:
+            eligible.append(f)
+
+    logger.info(
+        f"Auto-PR eligibility: {len(eligible)} eligible, "
+        f"{len(skipped)} skipped"
+    )
+    for s in skipped:
+        logger.debug(f"  Skipped [{s['vuln_type']}]: {s['reason']}")
+
+    return eligible
+
+
+# ────────────────────────────────────────────────
+# CORE ENGINE
+# ────────────────────────────────────────────────
+
+def create_fix_pr(
+    github_token: str,
+    repo_url: str,
+    scan_id: str,
+    findings: list[dict]
+) -> dict:
+    """
+    Main entry point. Creates a PR with auto-applied fixes.
+
+    Args:
+        github_token: Personal access token with repo write access
+        repo_url:     Full GitHub URL (https://github.com/owner/repo)
+        scan_id:      For branch naming and PR description
+        findings:     All findings from the scan (we filter internally)
+
+    Returns:
+        {
+            "success": bool,
+            "pr_url": str | None,
+            "pr_number": int | None,
+            "branch_name": str,
+            "fixes_applied": int,
+            "fixes_skipped": int,
+            "skipped_details": [...],
+            "error": str | None
+        }
+    """
+    # ── Validate inputs ────────────────────────────────────────
+    if not github_token or not github_token.strip():
+        return _error_result("GitHub token is required")
+
+    if not repo_url:
+        return _error_result("Repository URL is required")
+
+    # ── Parse owner/repo from URL ──────────────────────────────
+    owner, repo_name = _parse_repo_url(repo_url)
+    if not owner or not repo_name:
+        return _error_result(
+            f"Could not parse owner/repo from URL: {repo_url}. "
+            "Expected format: https://github.com/owner/repo"
+        )
+
+    # ── Filter eligible findings ───────────────────────────────
+    eligible = get_eligible_findings(findings)
+    if not eligible:
+        return _error_result(
+            "No findings are eligible for auto-fix. "
+            "Findings need: file_path, vulnerable_code, and fixed_code. "
+            "Web findings (headers, ports) cannot be auto-fixed."
+        )
+
+    # ── Connect to GitHub ──────────────────────────────────────
+    try:
+        g = Github(github_token)
+        repo = g.get_repo(f"{owner}/{repo_name}")
+        logger.info(f"Connected to GitHub repo: {repo.full_name}")
+    except GithubException as e:
+        if e.status == 401:
+            return _error_result(
+                "GitHub token is invalid or expired. "
+                "Create a new token at github.com/settings/tokens "
+                "with 'repo' scope (full read/write access)."
+            )
+        elif e.status == 404:
+            return _error_result(
+                f"Repository not found: {owner}/{repo_name}. "
+                "Check the URL is correct and your token has access."
+            )
+        return _error_result(f"GitHub connection failed: {str(e)}")
+
+    # ── Create branch ──────────────────────────────────────────
+    branch_suffix = scan_id.replace("scan_", "")[:8]
+    branch_name = f"shieldlabs-fixes-{branch_suffix}"
+
+    try:
+        default_branch = repo.default_branch
+        source_sha = repo.get_branch(default_branch).commit.sha
+        repo.create_git_ref(
+            ref=f"refs/heads/{branch_name}",
+            sha=source_sha
+        )
+        logger.info(f"Created branch: {branch_name} from {default_branch}")
+    except GithubException as e:
+        if e.status == 422:
+            # Branch already exists (re-run of same scan)
+            logger.warning(f"Branch {branch_name} already exists, reusing")
+        else:
+            return _error_result(f"Failed to create branch: {str(e)}")
+
+    # ── Clone repo to apply fixes locally ─────────────────────
+    temp_dir = tempfile.mkdtemp(prefix="shieldlabs_pr_")
+    try:
+        # Build authenticated clone URL
+        auth_url = repo.clone_url.replace(
+            "https://",
+            f"https://{github_token}@"
+        )
+
+        import subprocess
+        subprocess.run(
+            ["git", "clone", "--depth", "1", auth_url, temp_dir],
+            check=True,
+            capture_output=True,
+            timeout=60
+        )
+        logger.info(f"Cloned repo to {temp_dir}")
+
+    except subprocess.CalledProcessError as e:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return _error_result(f"Failed to clone repository: {e.stderr.decode()[:200]}")
+    except Exception as e:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return _error_result(f"Clone failed: {str(e)}")
+
+    # ── Group findings by file ─────────────────────────────────
+    fixes_by_file = {}
+    for finding in eligible:
+        file_path = finding["file_path"]
+
+        # Normalize path — remove leading slashes, make relative
+        # (stored paths might be absolute from the clone temp dir)
+        normalized = _normalize_path(file_path, temp_dir)
+        if not normalized:
+            continue
+
+        if normalized not in fixes_by_file:
+            fixes_by_file[normalized] = []
+        fixes_by_file[normalized].append(finding)
+
+    logger.info(f"Fixes span {len(fixes_by_file)} file(s)")
+
+    # ── Apply fixes file by file ───────────────────────────────
+    applied_fixes = []
+    skipped_fixes = []
+
+    try:
+        for relative_path, file_findings in fixes_by_file.items():
+            local_path = os.path.join(temp_dir, relative_path)
+
+            if not os.path.exists(local_path):
+                for f in file_findings:
+                    skipped_fixes.append({
+                        "vuln_type": f.get("vuln_type"),
+                        "file": relative_path,
+                        "reason": f"File not found in repo: {relative_path}"
+                    })
+                continue
+
+            # Read current file content
+            with open(local_path, 'r', encoding='utf-8', errors='ignore') as fh:
+                content = fh.read()
+
+            original_content = content  # keep for comparison
+
+            # Apply each fix for this file
+            for finding in file_findings:
+                vulnerable_code = finding.get("vulnerable_code", "").strip()
+                fixed_code = finding.get("fixed_code", "").strip()
+
+                if not vulnerable_code or not fixed_code:
+                    skipped_fixes.append({
+                        "vuln_type": finding.get("vuln_type"),
+                        "file": relative_path,
+                        "reason": "Empty vulnerable_code or fixed_code"
+                    })
+                    continue
+
+                if vulnerable_code in content:
+                    # EXACT match found — safe to replace
+                    content = content.replace(vulnerable_code, fixed_code, 1)
+                    applied_fixes.append({
+                        "vuln_type": finding.get("vuln_type"),
+                        "severity": finding.get("severity"),
+                        "cvss_score": finding.get("cvss_score"),
+                        "file": relative_path,
+                        "line": finding.get("line_number")
+                    })
+                    logger.info(
+                        f"  Applied fix: {finding.get('vuln_type')} "
+                        f"in {relative_path}"
+                    )
+                else:
+                    # Code changed since scan — skip, don't guess
+                    skipped_fixes.append({
+                        "vuln_type": finding.get("vuln_type"),
+                        "file": relative_path,
+                        "reason": (
+                            "Vulnerable code pattern not found in current file. "
+                            "File may have changed since scan was run."
+                        )
+                    })
+                    logger.warning(
+                        f"  Skipped: {finding.get('vuln_type')} — "
+                        f"exact match not found in {relative_path}"
+                    )
+
+            # If content changed, push the file to GitHub
+            if content != original_content:
+                try:
+                    # Get the file's SHA (needed for GitHub API update)
+                    gh_file = repo.get_contents(relative_path, ref=branch_name)
+                    repo.update_file(
+                        path=relative_path,
+                        message=f"fix: Apply ShieldLabs security fixes in {relative_path}",
+                        content=content,
+                        sha=gh_file.sha,
+                        branch=branch_name
+                    )
+                    logger.info(f"  Pushed fixed {relative_path} to {branch_name}")
+                except GithubException as e:
+                    logger.error(f"  Failed to push {relative_path}: {e}")
+                    # Move these from applied to skipped
+                    failed_types = [f.get("vuln_type") for f in file_findings]
+                    for ft in failed_types:
+                        skipped_fixes.append({
+                            "vuln_type": ft,
+                            "file": relative_path,
+                            "reason": f"GitHub push failed: {str(e)}"
+                        })
+                        applied_fixes = [
+                            af for af in applied_fixes
+                            if not (af["file"] == relative_path and af["vuln_type"] == ft)
+                        ]
+
+    finally:
+        # Always clean up temp directory
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.info("Cleaned up temp directory")
+
+    # If nothing got applied, don't open an empty PR
+    if not applied_fixes:
+        return _error_result(
+            "No fixes could be applied — all matches failed. "
+            "This usually means the code changed since the scan ran. "
+            "Try re-scanning the repository.",
+            extra={
+                "branch_name": branch_name,
+                "fixes_applied": 0,
+                "fixes_skipped": len(skipped_fixes),
+                "skipped_details": skipped_fixes
+            }
+        )
+
+    # ── Create Pull Request ────────────────────────────────────
+    pr_body = _build_pr_description(
+        scan_id=scan_id,
+        applied=applied_fixes,
+        skipped=skipped_fixes
+    )
+
+    try:
+        pr = repo.create_pull(
+            title=f"🛡️ ShieldLabs: {len(applied_fixes)} Security Fix"
+                  f"{'es' if len(applied_fixes) != 1 else ''} Applied",
+            body=pr_body,
+            head=branch_name,
+            base=default_branch
+        )
+        logger.info(f"PR created: {pr.html_url}")
+
+        return {
+            "success": True,
+            "pr_url": pr.html_url,
+            "pr_number": pr.number,
+            "branch_name": branch_name,
+            "fixes_applied": len(applied_fixes),
+            "fixes_skipped": len(skipped_fixes),
+            "applied_details": applied_fixes,
+            "skipped_details": skipped_fixes,
+            "error": None
+        }
+
+    except GithubException as e:
+        return _error_result(
+            f"Failed to create Pull Request: {str(e)}",
+            extra={
+                "branch_name": branch_name,
+                "fixes_applied": len(applied_fixes),
+                "fixes_skipped": len(skipped_fixes)
+            }
+        )
+
+
+# ────────────────────────────────────────────────
+# HELPERS
+# ────────────────────────────────────────────────
+
+def _parse_repo_url(url: str) -> tuple[str, str]:
+    """Extract owner and repo name from GitHub URL."""
+    try:
+        cleaned = url.rstrip("/")
+        if cleaned.endswith(".git"):
+            cleaned = cleaned[:-4]
+        parts = cleaned.replace("https://github.com/", "").split("/")
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+    except Exception:
+        pass
+    return "", ""
+
+
+def _normalize_path(file_path: str, temp_dir: str) -> str | None:
+    """
+    Convert an absolute or mixed path to a repo-relative path.
+    e.g. /tmp/shieldlabs_abc/app/main.py → app/main.py
+    """
+    if not file_path:
+        return None
+
+    # If it's absolute and starts with the temp dir, make it relative
+    if os.path.isabs(file_path) and temp_dir in file_path:
+        return os.path.relpath(file_path, temp_dir)
+
+    # If it already looks relative, return as-is
+    if not os.path.isabs(file_path):
+        return file_path
+
+    # Last resort — just take the filename
+    return os.path.basename(file_path)
+
+
+def _build_pr_description(
+    scan_id: str,
+    applied: list[dict],
+    skipped: list[dict]
+) -> str:
+    """Build a human-readable PR description."""
+
+    lines = [
+        "## 🛡️ ShieldLabs Automated Security Fix",
+        "",
+        f"**Scan ID:** `{scan_id}`",
+        f"**Fixes Applied:** {len(applied)}",
+        f"**Fixes Skipped:** {len(skipped)}",
+        "",
+        "> ⚠️ **Review each change before merging.** "
+        "AI-generated fixes are correct for the detected pattern but "
+        "may need adjustment for your specific business logic.",
+        "",
+    ]
+
+    if applied:
+        lines += [
+            "### ✅ Applied Fixes",
+            "",
+            "| Vulnerability | File | Line | Severity | CVSS |",
+            "|---|---|---|---|---|",
+        ]
+        for fix in applied:
+            lines.append(
+                f"| {fix['vuln_type']} "
+                f"| `{fix['file']}` "
+                f"| {fix.get('line', 'N/A')} "
+                f"| {fix.get('severity', 'N/A')} "
+                f"| {fix.get('cvss_score', 'N/A')} |"
+            )
+        lines.append("")
+
+    if skipped:
+        lines += [
+            "### ⚠️ Skipped (Manual Review Required)",
+            "",
+        ]
+        for skip in skipped:
+            lines.append(
+                f"- **{skip['vuln_type']}** in `{skip['file']}`: "
+                f"{skip['reason']}"
+            )
+        lines.append("")
+
+    lines += [
+        "---",
+        "_Generated by [ShieldLabs](https://github.com/himachal12/ShieldLabs) "
+        "— AI-powered security scanning for Nepal startups_ 🇳🇵",
+    ]
+
+    return "\n".join(lines)
+
+
+def _error_result(message: str, extra: dict = None) -> dict:
+    """Standardized error response."""
+    result = {
+        "success": False,
+        "pr_url": None,
+        "pr_number": None,
+        "branch_name": "",
+        "fixes_applied": 0,
+        "fixes_skipped": 0,
+        "applied_details": [],
+        "skipped_details": [],
+        "error": message
+    }
+    if extra:
+        result.update(extra)
+    return result

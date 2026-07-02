@@ -155,6 +155,46 @@ class CombinedScanRequest(BaseModel):
         description="Must be True to enable active scan mode."
     )
 
+class CreatePRRequest(BaseModel):
+    """Request to create a GitHub PR with auto-applied fixes"""
+
+    scan_id: str = Field(
+        ...,
+        description="Scan ID to generate fixes from"
+    )
+    github_token: str = Field(
+        ...,
+        description="GitHub personal access token with repo write access. "
+                    "Create at github.com/settings/tokens — needs 'repo' scope."
+    )
+    repo_url: HttpUrl = Field(
+        ...,
+        description="The GitHub repository URL to create the PR on"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "scan_id": "scan_abc123",
+                "github_token": "ghp_yourpersonalaccesstoken",
+                "repo_url": "https://github.com/yourname/yourapp"
+            }
+        }
+
+
+class PRResult(BaseModel):
+    """Result of creating an auto-fix PR"""
+
+    success: bool
+    pr_url: Optional[str] = None
+    pr_number: Optional[int] = None
+    branch_name: str = ""
+    fixes_applied: int = 0
+    fixes_skipped: int = 0
+    applied_details: List[dict] = []
+    skipped_details: List[dict] = []
+    error: Optional[str] = None
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -228,6 +268,7 @@ class ResultsResponse(BaseModel):
     scan_id: str
     status: StatusEnum
     scan_type: ScanTypeEnum
+    repo_url: Optional[str] = None
     total_findings: int
     critical_count: int
     high_count: int

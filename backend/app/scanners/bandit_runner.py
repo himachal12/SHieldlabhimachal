@@ -12,6 +12,38 @@ from app.utils.logger import get_logger
 
 logger = get_logger("bandit_runner")
 
+
+def _get_exact_code(file_path: str, line_number: int, line_range: list = None) -> str:
+    """
+    Read the actual source file and return the exact, literal text at
+    the given location -- no line-number prefixes, no formatting.
+    This is what auto_pr's exact-match replacement relies on:
+    Bandit's own 'code' field is display-formatted for terminal output
+    and will never match real file content byte-for-byte.
+
+    If line_range is provided (Bandit gives this for multi-line issues,
+    e.g. [109, 110]), we grab that whole span. Otherwise we grab just
+    the single line_number.
+    """
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+    except Exception:
+        return ""
+
+    if line_range and len(line_range) >= 2:
+        start, end = line_range[0], line_range[-1]
+    else:
+        start, end = line_number, line_number
+
+    if start < 1 or end > len(lines):
+        return ""
+
+    # lines is 0-indexed, line numbers are 1-indexed
+    snippet_lines = lines[start - 1 : end]
+    return "".join(snippet_lines).rstrip("\n")
+
+
 # Map Bandit's internal test IDs to our vuln_type categories.
 # Reference: https://bandit.readthedocs.io/en/latest/plugins/index.html
 BANDIT_TO_VULN_TYPE = {
@@ -121,15 +153,26 @@ def run_bandit(repo_path: str, timeout: int = 120) -> list[dict]:
         severity = issue.get("issue_severity", "MEDIUM").upper()
         confidence_label = issue.get("issue_confidence", "MEDIUM").upper()
 
+        file_path = issue.get("filename")
+        line_number = issue.get("line_number")
+        line_range = issue.get("line_range")
+
         findings.append(
             {
                 "vuln_type": vuln_type,
                 "severity": severity,
-                "file_path": issue.get("filename"),
-                "line_number": issue.get("line_number"),
+                "file_path": file_path,
+                "line_number": line_number,
                 "description": issue.get("issue_text"),
-                "vulnerable_code": (issue.get("code") or "").strip(),
-                "confidence": CONFIDENCE_MAP.get(confidence_label, 0.5),
+                "vulnerable_code": _get_exact_code(
+                    file_path,
+                    line_number,
+                    line_range,
+                ),
+                "confidence": CONFIDENCE_MAP.get(
+                    confidence_label,
+                    0.5,
+                ),
                 "source": "bandit",
                 "bandit_test_id": test_id,
             }

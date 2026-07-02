@@ -1,3 +1,4 @@
+import AutoPRPanel from '../components/AutoPRPanel'
 import AttackChainCard from '../components/AttackChainCard'
 import { Link2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -91,10 +92,10 @@ export default function Results() {
     results.critical_count > 0
       ? 'CRITICAL'
       : results.high_count > 0
-      ? 'HIGH'
-      : results.medium_count > 0
-      ? 'MEDIUM'
-      : 'LOW'
+        ? 'HIGH'
+        : results.medium_count > 0
+          ? 'MEDIUM'
+          : 'LOW'
 
   return (
     <div className="min-h-screen px-4 py-8 max-w-5xl mx-auto">
@@ -166,7 +167,14 @@ export default function Results() {
           </div>
         ))}
       </div>
-
+      {/* Auto-PR Panel — only for code/combined scans */}
+      {results.scan_type !== 'web' && (
+        <AutoPRPanel
+          scanId={scanId}
+          repoUrl={results.repo_url}
+          scanType={results.scan_type}
+        />
+      )}
       {/* Chart + Filter */}
       <div className="grid md:grid-cols-3 gap-4 mb-6">
 
@@ -188,11 +196,10 @@ export default function Results() {
             <button
               onClick={() => setFilter('ALL')}
               className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
-              ${
-                filter === 'ALL'
+              ${filter === 'ALL'
                   ? 'bg-accent text-primary'
                   : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-              }`}
+                }`}
             >
               All ({findings.length})
             </button>
@@ -209,11 +216,10 @@ export default function Results() {
                   key={sev}
                   onClick={() => setFilter(sev)}
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
-                  ${
-                    filter === sev
+                  ${filter === sev
                       ? 'bg-accent text-primary'
                       : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                  }`}
+                    }`}
                 >
                   {sev} ({count})
                 </button>

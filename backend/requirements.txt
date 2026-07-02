@@ -49,3 +49,5 @@ loguru==0.7.2
 # Async support
 aiofiles==23.2.1
 asyncio-contextmanager
+
+PyGithub==2.1.1
