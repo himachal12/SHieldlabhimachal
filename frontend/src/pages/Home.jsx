@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Shield,  Globe, Layers, AlertTriangle } from 'lucide-react'
 import { startCodeScan, startWebScan, startCombinedScan } from '../api/client'
+import ActiveScanConsent from '../components/ActiveScanConsent'
 
 const SCAN_MODES = [
   {
@@ -36,42 +37,73 @@ export default function Home() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
+  // Active scan state
+  const [activeEnabled, setActiveEnabled] = useState(false)
+  const [consentGiven, setConsentGiven] = useState(false)
+  const [activeUrls, setActiveUrls] = useState([])
+
+  const showActiveToggle = scanType === 'web' || scanType === 'combined'
+
   const handleScan = async () => {
     setError('')
 
     // Validation
-    if (scanType === 'code' && !repoUrl) {
+    if ((scanType === 'code' || scanType === 'combined') && !repoUrl) {
       setError('Please enter a GitHub repository URL')
       return
     }
-    if (scanType === 'web' && !domain) {
+    if ((scanType === 'web' || scanType === 'combined') && !domain) {
       setError('Please enter a domain to scan')
       return
     }
-    if (scanType === 'combined' && (!repoUrl || !domain)) {
-      setError('Combined scan requires both a GitHub URL and a domain')
+    if (activeEnabled && !consentGiven) {
+      setError('You must confirm consent before running an active scan')
       return
     }
+    if (activeEnabled && consentGiven && activeUrls.length === 0) {
+      setError('Active scan requires at least one URL with query parameters')
+      return
+    }
+
+    const scanMode = activeEnabled && consentGiven ? 'active' : 'passive'
 
     setLoading(true)
     try {
       let response
+
       if (scanType === 'code') {
         response = await startCodeScan(repoUrl)
       } else if (scanType === 'web') {
-        response = await startWebScan(domain)
+        response = await startWebScan(
+          domain,
+          scanMode,
+          consentGiven,
+          activeUrls
+        )
       } else {
-        response = await startCombinedScan(repoUrl, domain)
+        // Combined — pass active scan params too
+        response = await startCombinedScan(repoUrl, domain, scanMode, consentGiven)
       }
 
-      const { scan_id } = response.data
-      navigate(`/scan/${scan_id}`)
+      navigate(`/scan/${response.data.scan_id}`)
 
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to start scan. Is the backend running?')
+      setError(
+        err.response?.data?.detail ||
+        'Failed to start scan. Is the backend running on port 8000?'
+      )
     } finally {
       setLoading(false)
     }
+  }
+
+  // Reset active scan state when switching modes
+  const handleModeChange = (mode) => {
+    setScanType(mode)
+    setActiveEnabled(false)
+    setConsentGiven(false)
+    setActiveUrls([])
+    setError('')
   }
 
   return (
@@ -91,16 +123,16 @@ export default function Home() {
         {SCAN_MODES.map((mode) => (
           <button
             key={mode.id}
-            onClick={() => setScanType(mode.id)}
+            onClick={() => handleModeChange(mode.id)}
             className={`
-              relative p-4 rounded-xl border-2 text-left transition-all
-              bg-surface ${mode.color}
+              relative p-4 rounded-xl border-2 text-left transition-all bg-surface
+              ${mode.color}
               ${scanType === mode.id ? mode.color.replace('hover:', '') : ''}
             `}
           >
             {mode.badge && (
               <span className="absolute -top-2 -right-2 bg-purple-500 text-white
-                             text-xs px-2 py-0.5 rounded-full font-bold">
+                               text-xs px-2 py-0.5 rounded-full font-bold">
                 {mode.badge}
               </span>
             )}
@@ -108,7 +140,8 @@ export default function Home() {
               size={20}
               className={`mb-2 ${scanType === mode.id ? 'text-accent' : 'text-slate-400'}`}
             />
-            <p className={`font-semibold text-sm ${scanType === mode.id ? 'text-white' : 'text-slate-300'}`}>
+            <p className={`font-semibold text-sm
+                          ${scanType === mode.id ? 'text-white' : 'text-slate-300'}`}>
               {mode.label}
             </p>
             <p className="text-xs text-slate-500 mt-1">{mode.description}</p>
@@ -118,6 +151,7 @@ export default function Home() {
 
       {/* Input fields */}
       <div className="w-full max-w-2xl space-y-3">
+
         {(scanType === 'code' || scanType === 'combined') && (
           <input
             type="url"
@@ -142,10 +176,28 @@ export default function Home() {
           />
         )}
 
+        {/* Active scan toggle (only for web/combined) */}
+        {showActiveToggle && (
+          <ActiveScanConsent
+            enabled={activeEnabled}
+            onToggle={() => {
+              setActiveEnabled(!activeEnabled)
+              if (activeEnabled) {
+                setConsentGiven(false)
+                setActiveUrls([])
+              }
+            }}
+            consentGiven={consentGiven}
+            onConsentChange={setConsentGiven}
+            activeUrls={activeUrls}
+            onUrlsChange={setActiveUrls}
+          />
+        )}
+
         {/* Error */}
         {error && (
-          <div className="flex items-center gap-2 text-red-400 text-sm bg-red-500/10
-                          border border-red-500/30 rounded-lg px-4 py-3">
+          <div className="flex items-center gap-2 text-red-400 text-sm
+                          bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3">
             <AlertTriangle size={16} />
             {error}
           </div>
@@ -168,15 +220,21 @@ export default function Home() {
           ) : (
             <>
               <Shield size={18} />
-              Start Scan
+              {activeEnabled && consentGiven ? '⚡ Start Active Scan' : 'Start Scan'}
             </>
           )}
         </button>
+
+        {/* Active scan mode badge */}
+        {activeEnabled && consentGiven && (
+          <p className="text-center text-xs text-orange-400">
+            ⚠️ Active mode: real payloads will be sent to {domain || 'target'}
+          </p>
+        )}
       </div>
 
-      {/* Footer note */}
       <p className="text-slate-600 text-xs mt-8 text-center">
-        Designed for Nepal's startup ecosystem and Tech community.
+        100% free & open source · Designed for Nepal's startup ecosystem - By VoidVex
       </p>
     </div>
   )

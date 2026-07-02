@@ -29,11 +29,17 @@ export const startWebScan = (domain, scanMode = 'passive', consentConfirmed = fa
     active_urls: activeUrls
   })
 
-export const startCombinedScan = (repoUrl, domain) =>
+export const startCombinedScan = (
+  repoUrl,
+  domain,
+  scanMode = 'passive',
+  consentConfirmed = false
+) =>
   api.post('/scan/combined', {
     repo_url: repoUrl,
     domain,
-    scan_mode: 'passive'
+    scan_mode: scanMode,
+    consent_confirmed: consentConfirmed,
   })
 
 // ── Status + results ────────────────────────────────────

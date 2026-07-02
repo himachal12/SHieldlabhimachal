@@ -165,7 +165,19 @@ class CombinedScanRequest(BaseModel):
             }
         }
 
+class AttackChainSchema(BaseModel):
+    """A cross-domain attack chain linking multiple findings"""
+    chain_id: str
+    finding_ids: List[str]
+    finding_types: List[str]
+    severity: SeverityEnum
+    attack_chain: List[str]       # Step-by-step attack path
+    time_to_exploit: str
+    impact: str
+    reasoning: str = ""
 
+    class Config:
+        from_attributes = True
 # ==================
 # RESPONSE SCHEMAS
 # ==================
@@ -222,6 +234,7 @@ class ResultsResponse(BaseModel):
     medium_count: int
     low_count: int
     findings: List[FindingSchema]
+    attack_chains: List[AttackChainSchema] = []   # ← ADD THIS
     report_path: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None

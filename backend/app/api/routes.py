@@ -195,7 +195,7 @@ async def get_scan_status(scan_id: str, db: Session = Depends(get_db)):
 
 @router.get("/results/{scan_id}", response_model=schemas.ResultsResponse)
 async def get_results(scan_id: str, db: Session = Depends(get_db)):
-    """Get complete scan results including all findings."""
+    """Get complete scan results including findings and attack chains"""
     scan = crud.get_scan(db, scan_id)
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
@@ -203,10 +203,31 @@ async def get_results(scan_id: str, db: Session = Depends(get_db)):
     if scan.status not in ("completed", "failed"):
         raise HTTPException(
             status_code=202,
-            detail=f"Scan still in progress ({scan.progress}%). Check /api/status/{scan_id}"
+            detail=f"Scan still in progress ({scan.progress}%). "
+                   f"Check /api/status/{scan_id}"
         )
 
     findings = crud.get_findings_by_scan(db, scan_id)
+
+    # Get attack chains (only exist for combined scans)
+    raw_chains = crud.get_chains_by_scan(db, scan_id)
+
+    # Build AttackChainSchema objects
+    chain_schemas = []
+    for c in raw_chains:
+        try:
+            chain_schemas.append(schemas.AttackChainSchema(
+                chain_id=c["chain_id"],
+                finding_ids=c["finding_ids"],
+                finding_types=c["finding_types"],
+                severity=c["severity"],
+                attack_chain=c["attack_chain"],
+                time_to_exploit=c["time_to_exploit"],
+                impact=c["impact"],
+                reasoning=c["reasoning"]
+            ))
+        except Exception as e:
+            logger.warning(f"Could not serialize chain {c.get('chain_id')}: {e}")
 
     return schemas.ResultsResponse(
         scan_id=scan.scan_id,
@@ -218,6 +239,7 @@ async def get_results(scan_id: str, db: Session = Depends(get_db)):
         medium_count=scan.medium_count,
         low_count=scan.low_count,
         findings=[schemas.FindingSchema.from_orm(f) for f in findings],
+        attack_chains=chain_schemas,
         report_path=scan.report_path,
         created_at=scan.created_at,
         completed_at=scan.completed_at

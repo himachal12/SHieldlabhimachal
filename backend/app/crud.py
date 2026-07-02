@@ -170,3 +170,36 @@ def create_report(db: Session, scan_id: str, file_path: str,
 def get_report(db: Session, scan_id: str) -> Report | None:
     """Get the report for a scan"""
     return db.query(Report).filter(Report.scan_id == scan_id).first()
+
+
+def get_chains_by_scan(db: Session, scan_id: str) -> list:
+    """Get all attack chains for a scan"""
+    from app.database import AttackChain
+    import json
+
+    chains = db.query(AttackChain).filter(
+        AttackChain.scan_id == scan_id
+    ).all()
+
+    result = []
+    for chain in chains:
+        try:
+            # description column stores the step list as JSON
+            attack_steps = json.loads(chain.description or "[]")
+            finding_ids = json.loads(chain.finding_ids or "[]")
+        except (json.JSONDecodeError, TypeError):
+            attack_steps = []
+            finding_ids = []
+
+        result.append({
+            "chain_id": chain.chain_id,
+            "finding_ids": finding_ids,
+            "finding_types": [],   # populated below if needed
+            "severity": chain.severity,
+            "attack_chain": attack_steps,
+            "time_to_exploit": chain.time_to_exploit or "unknown",
+            "impact": chain.impact or "",
+            "reasoning": ""
+        })
+
+    return result
