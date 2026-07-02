@@ -15,32 +15,42 @@ logger = get_logger("fix_generation")
 
 def _parse_llm_fix_response(response: str) -> dict | None:
     """
-    Parse the LLM's JSON response. Returns None if it's malformed --
-    caller decides what to do (we never want a malformed response to
-    silently produce a broken/fake fix).
+    Parse the LLM's JSON response. Returns None if malformed.
     """
     try:
         cleaned = response.strip()
         if cleaned.startswith("```"):
-            # Strip markdown fences if the model added them despite instructions
             cleaned = cleaned.split("```")[1]
             if cleaned.startswith("json"):
                 cleaned = cleaned[4:]
         cleaned = cleaned.strip()
         parsed = json.loads(cleaned)
 
-        # Validate required keys are present
         required = {"fixed_code", "why_vulnerable", "why_fix_works", "remediation_time"}
         if not required.issubset(parsed.keys()):
             logger.warning(f"LLM fix response missing required keys: {parsed.keys()}")
             return None
+
+        # ── FIX FOR PROBLEM 1 ──────────────────────────────────
+        # LLMs often return \n as a literal escape sequence inside
+        # the JSON string value (double-escaped). json.loads() should
+        # handle single-escaped \n → real newline, but some models
+        # output \\n which survives json.loads as literal backslash-n.
+        # This ensures fixed_code always has real newline characters.
+        fixed = parsed.get("fixed_code", "")
+        if isinstance(fixed, str):
+            # Replace literal \n (two chars: backslash + n) with real newline
+            # Only when it's not already a real newline
+            fixed = fixed.replace("\\n", "\n")
+            # Same for \t → real tab
+            fixed = fixed.replace("\\t", "\t")
+            parsed["fixed_code"] = fixed
 
         return parsed
 
     except (json.JSONDecodeError, IndexError, TypeError) as e:
         logger.warning(f"Could not parse LLM fix response: {e} -- raw: {response[:150]!r}")
         return None
-
 
 def generate_fix(finding: dict) -> dict:
     """

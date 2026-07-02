@@ -38,7 +38,55 @@ logger = get_logger("auto_pr")
 # ────────────────────────────────────────────────
 # ELIGIBILITY FILTER
 # ────────────────────────────────────────────────
+def _get_base_indent(code: str) -> str:
+    """
+    Detect the base indentation of the first non-empty line of a code snippet.
+    Returns the whitespace string (e.g. '    ' for 4 spaces).
+    """
+    for line in code.split("\n"):
+        if line.strip():
+            return line[: len(line) - len(line.lstrip())]
+    return ""
 
+
+def _apply_indent(fixed_code: str, base_indent: str) -> str:
+    """
+    Apply base_indent to every non-empty line of fixed_code.
+    Strips existing leading whitespace first, then re-indents.
+    This fixes Problem 2: LLM-generated fixes often have wrong or missing indent.
+    """
+    lines = fixed_code.split("\n")
+    result = []
+    for line in lines:
+        if line.strip():
+            result.append(base_indent + line.lstrip())
+        else:
+            result.append("")
+    return "\n".join(result)
+
+
+def _is_structural_rewrite(vulnerable_code: str, fixed_code: str) -> bool:
+    """
+    Detect if the LLM generated a structural rewrite instead of a drop-in fix.
+    A drop-in fix should have roughly the same number of lines (±2 lines max).
+    A structural rewrite (adding a whole new function def) is NOT safe to apply.
+
+    This fixes Problem 3: LLM replacing one line with a whole function definition.
+    """
+    vuln_lines = [l for l in vulnerable_code.split("\n") if l.strip()]
+    fix_lines = [l for l in fixed_code.split("\n") if l.strip()]
+
+    # If fix is WAY longer than the original, it's probably a structural rewrite
+    if len(fix_lines) > len(vuln_lines) + 5:
+        return True
+
+    # If fix contains a function definition and original doesn't, it's a rewrite
+    fix_has_def = any(l.strip().startswith("def ") for l in fix_lines)
+    vuln_has_def = any(l.strip().startswith("def ") for l in vuln_lines)
+    if fix_has_def and not vuln_has_def:
+        return True
+
+    return False
 def get_eligible_findings(findings: list[dict]) -> list[dict]:
     """
     Filter findings that qualify for auto-fix.
@@ -263,9 +311,43 @@ def create_fix_pr(
                     })
                     continue
 
+                # ── Detect indentation of vulnerable code in context ──────
+                base_indent = _get_base_indent(vulnerable_code)
+
+                # ── Check if fix is a structural rewrite (not drop-in) ────
+                if _is_structural_rewrite(vulnerable_code, fixed_code):
+                    skipped_fixes.append({
+                        "vuln_type": finding.get("vuln_type"),
+                        "file": relative_path,
+                        "reason": (
+                            "AI-generated fix is a structural rewrite "
+                            "(e.g. adds a new function) rather than a drop-in "
+                            "replacement. Manual fix recommended."
+                        )
+                    })
+                    logger.warning(
+                        f"  Skipped (structural rewrite): "
+                        f"{finding.get('vuln_type')} in {relative_path}"
+                    )
+                    continue
+
+                # ── Re-indent the fix to match surrounding code ───────────
+                indented_fix = _apply_indent(fixed_code, base_indent)
+
+                # ── Try exact match first ──────────────────────────────────
+                matched = False
                 if vulnerable_code in content:
-                    # EXACT match found — safe to replace
-                    content = content.replace(vulnerable_code, fixed_code, 1)
+                    content = content.replace(vulnerable_code, indented_fix, 1)
+                    matched = True
+
+                # ── Try stripped match (handles minor whitespace differences) ──
+                elif vulnerable_code.strip() in content:
+                    content = content.replace(
+                        vulnerable_code.strip(), indented_fix.strip(), 1
+                    )
+                    matched = True
+
+                if matched:
                     applied_fixes.append({
                         "vuln_type": finding.get("vuln_type"),
                         "severity": finding.get("severity"),
@@ -278,7 +360,6 @@ def create_fix_pr(
                         f"in {relative_path}"
                     )
                 else:
-                    # Code changed since scan — skip, don't guess
                     skipped_fixes.append({
                         "vuln_type": finding.get("vuln_type"),
                         "file": relative_path,

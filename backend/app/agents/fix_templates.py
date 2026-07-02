@@ -7,9 +7,17 @@ consistent rather than the model improvising a different style every time.
 
 # Shared instruction block appended to every category prompt
 OUTPUT_FORMAT_INSTRUCTIONS = """
+CRITICAL REQUIREMENT FOR fixed_code:
+- Replace ONLY the exact lines shown in the vulnerable code above
+- Do NOT add new functions, classes, or imports outside of what's shown
+- The fix must be a direct drop-in replacement for the vulnerable code
+- Match the indentation of the original code exactly
+- If you need an import, add it inline (e.g. "import subprocess\\nresult = ...")
+  NOT as a separate top-level import block
+
 Respond with ONLY valid JSON, no markdown fences, no extra commentary:
 {{
-  "fixed_code": "the corrected code, same style/indentation as original",
+  "fixed_code": "the corrected code as a direct replacement for the vulnerable snippet",
   "why_vulnerable": "one sentence explaining the specific risk",
   "why_fix_works": "one sentence explaining why the fix resolves it",
   "remediation_time": "estimate like '15 minutes' or '1 hour'"
