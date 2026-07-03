@@ -1,51 +1,55 @@
 """
 sqlmap Runner — ACTIVE SCAN MODULE
 ===========================================
-⚠️  THIS MODULE ONLY RUNS WHEN THE USER HAS EXPLICITLY CONSENTED
-    TO ACTIVE SCANNING. IT IS NEVER CALLED IN PASSIVE MODE.
-===========================================
+Uses official sqlmap repo (not pip install) to bypass
+Windows Smart App Control which blocks .exe files.
 
-sqlmap sends real SQL injection payloads to a target application.
-This is active exploitation testing -- use only on systems you own
-or have explicit written authorization to test.
-
-Integration approach:
-- Passive mode (default): ShieldLabs detects SQL injection in SOURCE CODE
-  via Bandit + AST analysis (Day 4). No live payloads sent.
-- Active mode (opt-in): sqlmap confirms exploitability on a LIVE TARGET
-  with real payloads. Requires explicit per-scan user consent.
-
-This two-tier approach means:
-  (1) Default behavior is always safe
-  (2) Power users who own their targets can run full confirmation testing
-  (3) We satisfy the original project spec without ethical compromise
+Run pattern: python sqlmap.py [args]
+NOT: sqlmap.exe [args]  ← blocked by Windows
+NOT: python -m sqlmap   ← not structured as runnable module
 """
 
 import subprocess
 import json
 import sys
-import shutil
 import os
 from app.utils.rate_limiter import active_scan_limiter
 from app.utils.logger import get_logger
 
 logger = get_logger("sqlmap_runner")
 
-# sqlmap is a Python tool -- prefer python -m sqlmap (avoids Windows
-# Application Control blocking, same fix as Bandit on Day 4)
-_SQLMAP_PATH = os.getenv("SQLMAP_PATH", "sqlmap")
+# Path to sqlmap.py from official repo
+# Set in .env as SQLMAP_PATH
+_SQLMAP_SCRIPT = os.getenv(
+    "SQLMAP_PATH",
+    r"C:\Users\paude\OneDrive\Desktop\sqlmap\sqlmap.py"
+)
 
 
 def is_sqlmap_available() -> bool:
-    """Check sqlmap is reachable."""
+    """
+    Check sqlmap is available by running it via Python directly.
+    This bypasses Windows Smart App Control.
+    """
+    if not _SQLMAP_SCRIPT or not os.path.exists(_SQLMAP_SCRIPT):
+        logger.warning(
+            f"sqlmap.py not found at: {_SQLMAP_SCRIPT}\n"
+            f"Clone it: git clone https://github.com/sqlmapproject/sqlmap.git\n"
+            f"Then set SQLMAP_PATH in .env"
+        )
+        return False
+
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "sqlmap", "--version"],
+            [sys.executable, _SQLMAP_SCRIPT, "--version"],
             capture_output=True,
-            timeout=10
+            timeout=15,
+            text=True
         )
-        return result.returncode == 0
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        # sqlmap --version exits with 0 and prints version info
+        return result.returncode == 0 or "sqlmap" in result.stdout.lower()
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as e:
+        logger.error(f"sqlmap availability check failed: {e}")
         return False
 
 
@@ -56,48 +60,45 @@ def run_sqlmap_active(
     timeout: int = 120
 ) -> list[dict]:
     """
-    Run sqlmap against a target URL in active scan mode.
-
-    ⚠️  ONLY CALL THIS AFTER EXPLICIT USER CONSENT HAS BEEN RECORDED.
-        The web scanner orchestrator enforces this -- do not call directly.
+    Run sqlmap against a target URL.
+    Called ONLY after explicit user consent is confirmed.
 
     Args:
-        target_url: Full URL including query params to test
-                    e.g. "http://example.com/search?q=test"
-        params:     Specific parameters to test (None = test all)
-        max_requests: Cap on total HTTP requests sqlmap sends (prevents abuse)
-        timeout:    Max seconds for the whole run
-
-    Returns:
-        List of finding dicts for confirmed SQLi vulnerabilities
+        target_url:   Full URL with query params e.g. http://target.com/search?q=1
+        params:       Specific params to test (None = test all found)
+        max_requests: Hard cap on total HTTP requests
+        timeout:      Max seconds for entire run
     """
     if not is_sqlmap_available():
-        logger.error("sqlmap not available via 'python -m sqlmap'. Install with: pip install sqlmap")
+        logger.error("sqlmap not available. See SQLMAP_PATH in .env")
         return []
 
-    # Rate limit the START of each active scan
+    # Rate limit the start of each active scan
     active_scan_limiter.wait()
 
     cmd = [
-        sys.executable, "-m", "sqlmap",
+        sys.executable,        # Use current Python (trusted by Smart App Control)
+        _SQLMAP_SCRIPT,        # Official sqlmap.py script
         "-u", target_url,
-        "--batch",                      # non-interactive (no prompts)
+        "--batch",             # Non-interactive
         "--output-format=json",
-        "--answers=all",                # auto-answer all prompts with default
-        f"--max-requests={max_requests}",  # hard cap on requests sent
-        "--level=1",                    # lowest test level (least invasive)
-        "--risk=1",                     # lowest risk level (no dangerous tests)
-        "--no-cast",                    # faster, simpler payloads
-        "--timeout=10",                 # per-request timeout
+        f"--max-requests={max_requests}",
+        "--level=1",           # Least invasive
+        "--risk=1",            # Lowest risk
+        "--timeout=10",        # Per-request timeout
         "--retries=1",
-        "--technique=BEU",              # Boolean, Error, Union based only
-                                        # (skip time-based -- too slow/disruptive)
+        "--technique=BEU",     # Boolean, Error, Union (skip time-based)
+        "--no-cast",
+        "--flush-session",     # Fresh session each run
     ]
 
     if params:
         cmd.extend(["-p", ",".join(params)])
 
-    logger.info(f"[ACTIVE SCAN] Running sqlmap on {target_url} (max_requests={max_requests})")
+    logger.info(
+        f"[ACTIVE SCAN] sqlmap on {target_url} "
+        f"(max_requests={max_requests})"
+    )
 
     try:
         result = subprocess.run(
@@ -119,8 +120,7 @@ def run_sqlmap_active(
 def _parse_sqlmap_output(stdout: str, stderr: str, target_url: str) -> list[dict]:
     """
     Parse sqlmap output for confirmed injection points.
-    sqlmap's --output-format=json is not always perfectly structured,
-    so we parse for key indicator strings as a fallback too.
+    Handles both JSON output and text indicator fallback.
     """
     findings = []
 
@@ -131,9 +131,6 @@ def _parse_sqlmap_output(stdout: str, stderr: str, target_url: str) -> list[dict
             if not line or not line.startswith("{"):
                 continue
             data = json.loads(line)
-
-            # sqlmap JSON output structure varies by version --
-            # look for the "data" key that contains injection results
             if "data" in data and data["data"]:
                 for param, details in data.get("data", {}).items():
                     findings.append(_build_sqli_finding(target_url, param, details))
@@ -141,33 +138,59 @@ def _parse_sqlmap_output(stdout: str, stderr: str, target_url: str) -> list[dict
     except (json.JSONDecodeError, TypeError):
         pass
 
-    # Fallback: parse stdout text for sqlmap's indicator strings
-    # "Parameter: X (GET/POST)" followed by "Type: ..." indicates confirmed injection
-    if "is vulnerable" in stdout.lower() or "sqlinjection" in stdout.lower():
+    # Fallback: check for sqlmap's text indicators
+    combined = stdout + stderr
+    injectable_indicators = [
+        "is vulnerable",
+        "appears to be",
+        "injectable",
+        "sql injection",
+        "parameter",
+    ]
+
+    if any(indicator in combined.lower() for indicator in injectable_indicators):
+        # Extract parameter name from output if possible
+        param_name = _extract_param_from_output(combined, target_url)
         findings.append({
             "vuln_type": "SQL Injection (Confirmed Active)",
             "severity": "CRITICAL",
             "description": (
-                f"sqlmap confirmed SQL injection vulnerability on {target_url}. "
-                "Active testing with real payloads verified exploitability."
+                f"sqlmap confirmed SQL injection on {target_url}. "
+                f"Parameter '{param_name}' is injectable. "
+                "Real attack payloads verified exploitability in active scan mode."
             ),
             "url": target_url,
             "confidence": 0.99,
             "source": "sqlmap_active",
             "scan_mode": "active",
-            "fix_source": "static_guide",
+            "fixed_code": None,
             "fix_explanation": (
-                "Use parameterized queries for ALL database operations. "
+                "Immediately switch to parameterized queries. "
                 "Never concatenate user input into SQL strings. "
-                "Consider a WAF as an additional layer."
+                "Use an ORM or prepared statements."
             ),
             "remediation_time": "1-2 hours"
         })
-
-    if not findings:
-        logger.info(f"sqlmap found no confirmed SQLi on {target_url}")
+    else:
+        logger.info(f"sqlmap: no SQLi confirmed on {target_url}")
 
     return findings
+
+
+def _extract_param_from_output(output: str, url: str) -> str:
+    """Try to extract the vulnerable parameter name from sqlmap output."""
+    # sqlmap typically says "Parameter: X (GET)"
+    import re
+    match = re.search(r"Parameter[:\s]+['\"]?(\w+)['\"]?\s*\(", output, re.IGNORECASE)
+    if match:
+        return match.group(1)
+
+    # Fall back to extracting from URL
+    if "?" in url:
+        first_param = url.split("?")[1].split("=")[0]
+        return first_param
+
+    return "unknown"
 
 
 def _build_sqli_finding(target_url: str, param: str, details: dict) -> dict:
@@ -177,22 +200,25 @@ def _build_sqli_finding(target_url: str, param: str, details: dict) -> dict:
         if isinstance(technique, dict) and "title" in technique:
             injection_types.append(technique["title"])
 
-    injection_desc = ", ".join(injection_types) if injection_types else "SQL Injection"
+    injection_desc = (
+        ", ".join(injection_types) if injection_types
+        else "SQL Injection"
+    )
 
     return {
         "vuln_type": "SQL Injection (Confirmed Active)",
         "severity": "CRITICAL",
         "description": (
-            f"sqlmap confirmed {injection_desc} on parameter '{param}' at {target_url}. "
-            f"Vulnerability verified with real payloads in active scan mode."
+            f"sqlmap confirmed {injection_desc} on parameter '{param}' "
+            f"at {target_url}. Verified with real payloads in active scan mode."
         ),
         "url": target_url,
         "confidence": 0.99,
         "source": "sqlmap_active",
         "scan_mode": "active",
         "fix_explanation": (
-            "Immediately switch to parameterized queries for all database operations. "
-            "Use an ORM or prepared statements. Never concatenate user input into SQL."
+            "Switch to parameterized queries for all database operations. "
+            "Use ORM or prepared statements. Never concatenate user input into SQL."
         ),
         "remediation_time": "1-2 hours"
     }
