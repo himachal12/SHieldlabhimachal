@@ -13,44 +13,177 @@ import subprocess
 import json
 import sys
 import os
+import shutil
 from app.utils.rate_limiter import active_scan_limiter
 from app.utils.logger import get_logger
 
 logger = get_logger("sqlmap_runner")
 
-# Path to sqlmap.py from official repo
-# Set in .env as SQLMAP_PATH
+# Path to sqlmap.py from official repo.
+# Set in .env as SQLMAP_PATH.
 _SQLMAP_SCRIPT = os.getenv(
     "SQLMAP_PATH",
     r"C:\Users\paude\OneDrive\Desktop\sqlmap\sqlmap.py"
 )
 
+# Optional Python interpreter override for sqlmap.
+# This is important on Windows when the backend virtualenv Python hangs while
+# the normal system Python runs sqlmap correctly from the terminal.
+_SQLMAP_PYTHON = os.getenv("SQLMAP_PYTHON", "").strip()
+_SQLMAP_COMMAND: list[str] | None = None
+_SQLMAP_USE_SHELL = False
+_SQLMAP_CHECKED = False
 
-def is_sqlmap_available() -> bool:
+
+def _python_candidates() -> list[list[str]]:
+    """Return Python command prefixes to try for launching sqlmap.py."""
+    candidates: list[list[str]] = []
+
+    if _SQLMAP_PYTHON:
+        candidates.append([_SQLMAP_PYTHON])
+
+    # Keep the backend interpreter as a candidate, but do not rely on it only.
+    candidates.append([sys.executable])
+
+    # If the venv interpreter hangs, fall back to the Python the user can run
+    # manually in the same shell/PATH.
+    for name in ("python", "python3"):
+        path = shutil.which(name)
+        if path:
+            candidates.append([path])
+
+    # Windows launcher. `py -3 sqlmap.py ...` is often the most reliable way
+    # to reach the normal Python install outside a virtualenv.
+    py_launcher = shutil.which("py")
+    if py_launcher:
+        candidates.append([py_launcher, "-3"])
+
+    unique: list[list[str]] = []
+    seen = set()
+    for command in candidates:
+        key = tuple(command)
+        if key not in seen:
+            unique.append(command)
+            seen.add(key)
+    return unique
+
+
+def _run_with_python(
+    command_prefix: list[str],
+    args: list[str],
+    timeout: int,
+    capture_output: bool = True,
+    use_shell: bool = False
+) -> subprocess.CompletedProcess:
+    """Run sqlmap.py with a specific Python command prefix."""
+    env = os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUNBUFFERED", "1")
+
+    command = [*command_prefix, _SQLMAP_SCRIPT, *args]
+    stdout = subprocess.PIPE if capture_output else subprocess.DEVNULL
+    stderr = subprocess.PIPE if capture_output else subprocess.DEVNULL
+
+    if use_shell:
+        # On Windows, users often verify sqlmap with a quoted shell command.
+        # A shell fallback handles cases where direct CreateProcess launches hang
+        # under Uvicorn/WatchFiles but the same quoted command works manually.
+        command = subprocess.list2cmdline(command)
+
+    return subprocess.run(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=stdout,
+        stderr=stderr,
+        text=True,
+        timeout=timeout,
+        cwd=os.path.dirname(_SQLMAP_SCRIPT) or None,
+        env=env,
+        shell=use_shell
+    )
+
+
+def _get_sqlmap_command() -> list[str] | None:
     """
-    Check sqlmap is available by running it via Python directly.
-    This bypasses Windows Smart App Control.
+    Resolve and cache the Python command that can launch sqlmap.py.
+
+    We intentionally try more than sys.executable because the backend may run
+    under backend\\venv\\Scripts\\python.exe while the user's manual `python`
+    command launches a different interpreter that handles sqlmap correctly.
     """
+    global _SQLMAP_COMMAND, _SQLMAP_USE_SHELL, _SQLMAP_CHECKED
+
+    if _SQLMAP_CHECKED:
+        return _SQLMAP_COMMAND
+
+    _SQLMAP_CHECKED = True
+
     if not _SQLMAP_SCRIPT or not os.path.exists(_SQLMAP_SCRIPT):
         logger.warning(
             f"sqlmap.py not found at: {_SQLMAP_SCRIPT}\n"
             f"Clone it: git clone https://github.com/sqlmapproject/sqlmap.git\n"
             f"Then set SQLMAP_PATH in .env"
         )
-        return False
+        return None
 
-    try:
-        result = subprocess.run(
-            [sys.executable, _SQLMAP_SCRIPT, "--version"],
-            capture_output=True,
-            timeout=15,
-            text=True
-        )
-        # sqlmap --version exits with 0 and prints version info
-        return result.returncode == 0 or "sqlmap" in result.stdout.lower()
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as e:
-        logger.error(f"sqlmap availability check failed: {e}")
-        return False
+    for command_prefix in _python_candidates():
+        launch_modes = [False]
+        if os.name == "nt":
+            launch_modes.append(True)
+
+        for use_shell in launch_modes:
+            printable = " ".join(command_prefix)
+            mode_label = "shell" if use_shell else "direct"
+            try:
+                result = _run_with_python(
+                    command_prefix,
+                    ["--version"],
+                    timeout=8,
+                    capture_output=False,
+                    use_shell=use_shell
+                )
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "sqlmap availability check timed out with Python command: "
+                    f"{printable} (mode={mode_label}). Trying the next option."
+                )
+                continue
+            except (FileNotFoundError, OSError) as e:
+                logger.warning(
+                    "sqlmap availability check failed with Python command "
+                    f"{printable} (mode={mode_label}): {e}"
+                )
+                continue
+
+            if result.returncode == 0:
+                _SQLMAP_COMMAND = command_prefix
+                _SQLMAP_USE_SHELL = use_shell
+                logger.info(
+                    "sqlmap available via Python command: "
+                    f"{printable} (mode={mode_label})"
+                )
+                return _SQLMAP_COMMAND
+
+            logger.warning(
+                "sqlmap availability check returned non-zero with Python command "
+                f"{printable} (mode={mode_label}, returncode={result.returncode})"
+            )
+
+    logger.error(
+        "sqlmap is not available through any Python candidate. If manual "
+        "`python sqlmap.py --version` works, set SQLMAP_PYTHON in .env to "
+        "that exact python.exe path."
+    )
+    return None
+
+
+def is_sqlmap_available() -> bool:
+    """
+    Check sqlmap is available by running sqlmap.py through a working Python.
+    This bypasses Windows Smart App Control and avoids hard-depending on the
+    backend virtualenv interpreter when it hangs.
+    """
+    return _get_sqlmap_command() is not None
 
 
 def run_sqlmap_active(
@@ -69,16 +202,15 @@ def run_sqlmap_active(
         max_requests: Hard cap on total HTTP requests
         timeout:      Max seconds for entire run
     """
-    if not is_sqlmap_available():
-        logger.error("sqlmap not available. See SQLMAP_PATH in .env")
+    sqlmap_command = _get_sqlmap_command()
+    if not sqlmap_command:
+        logger.error("sqlmap not available. See SQLMAP_PATH/SQLMAP_PYTHON in .env")
         return []
 
     # Rate limit the start of each active scan
     active_scan_limiter.wait()
 
-    cmd = [
-        sys.executable,        # Use current Python (trusted by Smart App Control)
-        _SQLMAP_SCRIPT,        # Official sqlmap.py script
+    args = [
         "-u", target_url,
         "--batch",             # Non-interactive
         "--output-format=json",
@@ -93,19 +225,21 @@ def run_sqlmap_active(
     ]
 
     if params:
-        cmd.extend(["-p", ",".join(params)])
+        args.extend(["-p", ",".join(params)])
 
     logger.info(
         f"[ACTIVE SCAN] sqlmap on {target_url} "
-        f"(max_requests={max_requests})"
+        f"(max_requests={max_requests}, python={' '.join(sqlmap_command)}, "
+        f"mode={'shell' if _SQLMAP_USE_SHELL else 'direct'})"
     )
 
     try:
-        result = subprocess.run(
-            cmd,
+        result = _run_with_python(
+            sqlmap_command,
+            args,
+            timeout=timeout,
             capture_output=True,
-            text=True,
-            timeout=timeout
+            use_shell=_SQLMAP_USE_SHELL
         )
         return _parse_sqlmap_output(result.stdout, result.stderr, target_url)
 
@@ -115,7 +249,6 @@ def run_sqlmap_active(
     except Exception as e:
         logger.error(f"sqlmap execution failed: {e}")
         return []
-
 
 def _parse_sqlmap_output(stdout: str, stderr: str, target_url: str) -> list[dict]:
     """
