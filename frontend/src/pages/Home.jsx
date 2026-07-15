@@ -82,7 +82,13 @@ export default function Home() {
         )
       } else {
         // Combined — pass active scan params too
-        response = await startCombinedScan(repoUrl, domain, scanMode, consentGiven)
+        response = await startCombinedScan(
+          repoUrl,
+          domain,
+          scanMode,
+          consentGiven,
+          activeUrls
+        )
       }
 
       navigate(`/scan/${response.data.scan_id}`)

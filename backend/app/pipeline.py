@@ -200,6 +200,7 @@ def run_combined_pipeline(
     domain: str,
     scan_mode: ScanMode = ScanMode.PASSIVE,
     consent_confirmed: bool = False,
+    active_urls: list = None,
 ):
     """
     Combined code + web scan with cross-domain analysis.
@@ -239,7 +240,8 @@ def run_combined_pipeline(
         web_findings = scan_web_target(
             target=domain,
             scan_mode=scan_mode,
-            consent_confirmed=consent_confirmed
+            consent_confirmed=consent_confirmed,
+            active_urls=active_urls or []
         )
         all_findings.extend(web_findings)
 
