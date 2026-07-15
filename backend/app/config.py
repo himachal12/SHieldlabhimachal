@@ -4,10 +4,13 @@ Centralized config with scan mode management.
 """
 
 import os
-from dotenv import load_dotenv
 from enum import Enum
+from importlib.util import find_spec
 
-load_dotenv()
+if find_spec("dotenv"):
+    from dotenv import load_dotenv
+
+    load_dotenv()
 
 
 class ScanMode(str, Enum):
@@ -35,11 +38,8 @@ class Config:
         or __import__("shutil").which("nuclei")
         or ""
     )
-    SQLMAP_PATH: str = (
-        os.getenv("SQLMAP_PATH")
-        or __import__("shutil").which("sqlmap")
-        or "sqlmap"
-    )
+    SQLMAP_PATH: str = os.getenv("SQLMAP_PATH", "")
+    SQLMAP_PYTHON: str = os.getenv("SQLMAP_PYTHON", "")
 
     # Scan modes
     DEFAULT_SCAN_MODE: ScanMode = ScanMode(

@@ -32,9 +32,11 @@ file_format = logging.Formatter(
 )
 file_handler.setFormatter(file_format)
 
-# Add handlers to logger
-logger.addHandler(console_handler)
-logger.addHandler(file_handler)
+# Add handlers once; uvicorn reload/import cycles can otherwise duplicate every line.
+if not logger.handlers:
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+logger.propagate = False
 
 def get_logger(name):
     """Get logger instance"""
