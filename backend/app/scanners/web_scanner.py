@@ -146,28 +146,27 @@ def scan_web_target(
     # ACTIVE SCANNING (ONLY if consent confirmed)
     # =========================================================
     if scan_mode == ScanMode.ACTIVE and consent_confirmed:
-        from app.scanners.sqlmap_runner import run_sqlmap_active, is_sqlmap_available
+        from app.scanners.sqlmap_runner import get_sqlmap_unavailable_reason, run_sqlmap_active
 
-        if not is_sqlmap_available():
+        if not active_urls:
             logger.warning(
-                "[ACTIVE] sqlmap not available. "
-                "Install with: pip install sqlmap"
-            )
-        elif not active_urls:
-            logger.warning(
-                "[ACTIVE] No specific URLs provided for sqlmap testing. "
-                "Provide active_urls parameter with URLs that have query parameters."
+                "[ACTIVE] SQLMap skipped: no active URLs were provided. "
+                "Provide active_urls with URLs that include query parameters."
             )
         else:
-            logger.info(f"[ACTIVE] Running sqlmap on {len(active_urls)} URL(s)...")
-            for url in active_urls:
-                sqlmap_findings = run_sqlmap_active(
-                    target_url=url,
-                    max_requests=settings.SQLMAP_MAX_REQUESTS
-                )
-                for f in sqlmap_findings:
-                    f["scan_mode"] = "active"
-                    findings.append(f)
+            unavailable_reason = get_sqlmap_unavailable_reason()
+            if unavailable_reason:
+                logger.warning(f"[ACTIVE] SQLMap skipped: {unavailable_reason}")
+            else:
+                logger.info(f"[ACTIVE] Running SQLMap on {len(active_urls)} URL(s)...")
+                for url in active_urls:
+                    sqlmap_findings = run_sqlmap_active(
+                        target_url=url,
+                        max_requests=settings.SQLMAP_MAX_REQUESTS
+                    )
+                    for f in sqlmap_findings:
+                        f["scan_mode"] = "active"
+                        findings.append(f)
 
         # Summary of active scan
         active_count = sum(1 for f in findings if f.get("scan_mode") == "active")

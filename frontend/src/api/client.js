@@ -33,13 +33,15 @@ export const startCombinedScan = (
   repoUrl,
   domain,
   scanMode = 'passive',
-  consentConfirmed = false
+  consentConfirmed = false,
+  activeUrls = []
 ) =>
   api.post('/scan/combined', {
     repo_url: repoUrl,
     domain,
     scan_mode: scanMode,
     consent_confirmed: consentConfirmed,
+    active_urls: activeUrls
   })
 
 // ── Status + results ────────────────────────────────────

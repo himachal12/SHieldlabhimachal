@@ -149,6 +149,7 @@ async def scan_combined(
                     domain=request.domain,
                     scan_mode=ScanMode(request.scan_mode),
                     consent_confirmed=request.consent_confirmed,
+                    active_urls=request.active_urls,
                 )
             finally:
                 task_db.close()
