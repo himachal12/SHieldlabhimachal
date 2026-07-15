@@ -155,6 +155,15 @@ class CombinedScanRequest(BaseModel):
         description="Must be True to enable active scan mode."
     )
 
+    active_urls: List[str] = Field(
+        default_factory=list,
+        description=(
+            "URLs containing query parameters to test with sqlmap "
+            "during active combined scans. Example: "
+            "['http://example.com/search?q=test']"
+        )
+    )
+
 class CreatePRRequest(BaseModel):
     """Request to create a GitHub PR with auto-applied fixes"""
 
