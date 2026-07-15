@@ -96,3 +96,32 @@ def test_sqlmap_availability_tries_shell_mode_on_windows_timeout(monkeypatch):
         (["system-python"], False, False),
         (["system-python"], True, False),
     ]
+
+
+def test_run_sqlmap_active_uses_cached_shell_mode(monkeypatch):
+    """When availability resolved with shell mode, active scans keep shell mode."""
+    executed = []
+
+    def fake_run(command_prefix, args, timeout, capture_output=True, use_shell=False):
+        executed.append((command_prefix, use_shell, capture_output))
+        return subprocess.CompletedProcess(
+            [*command_prefix, "sqlmap.py", *args],
+            returncode=0,
+            stdout="parameter 'q' appears to be injectable",
+            stderr=""
+        )
+
+    monkeypatch.setattr(sqlmap_runner, "_SQLMAP_COMMAND", ["system-python"])
+    monkeypatch.setattr(sqlmap_runner, "_SQLMAP_USE_SHELL", True)
+    monkeypatch.setattr(sqlmap_runner, "_SQLMAP_CHECKED", True)
+    monkeypatch.setattr(sqlmap_runner, "_run_with_python", fake_run)
+    monkeypatch.setattr(sqlmap_runner.active_scan_limiter, "wait", lambda: None)
+
+    findings = sqlmap_runner.run_sqlmap_active(
+        "http://target.local/search?q=test",
+        max_requests=5,
+        timeout=10
+    )
+
+    assert executed[0] == (["system-python"], True, True)
+    assert findings[0]["source"] == "sqlmap_active"
