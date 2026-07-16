@@ -124,6 +124,20 @@ def test_windows_paths_with_spaces(sqlmap_config):
     assert "--batch" in command
     assert "--answers" in command
     assert "--max-requests=7" in command
+    assert "--output-format=json" not in command
+
+
+def test_parse_text_output_detects_confirmed_sqli():
+    findings = sqlmap_runner._parse_sqlmap_output(
+        "Parameter: q (GET)\n    Type: boolean-based blind\n    Title: AND boolean-based blind - WHERE or HAVING clause\n",
+        "",
+        "http://a.test/search?q=1",
+    )
+
+    assert len(findings) == 1
+    assert findings[0]["source"] == "sqlmap_active"
+    assert findings[0]["severity"] == "CRITICAL"
+    assert "q" in findings[0]["description"]
 
 
 def test_active_scan_uses_sqlmap_launcher(monkeypatch):

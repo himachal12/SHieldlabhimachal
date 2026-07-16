@@ -145,7 +145,7 @@ def build_sqlmap_command(
         config.sqlmap_path,
         "-u",
         target_url,
-        "--output-format=json",
+
         f"--max-requests={max_requests}",
         "--level=1",
         "--risk=1",
