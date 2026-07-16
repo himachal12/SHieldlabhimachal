@@ -97,6 +97,15 @@ export default function Results() {
           ? 'MEDIUM'
           : 'LOW'
 
+  const aiFixCount = findings.filter((f) => f.fixed_code).length
+  const attackChainCount = results.attack_chains?.length || 0
+  const severitySummary = [
+    { label: 'critical', value: results.critical_count },
+    { label: 'high', value: results.high_count },
+    { label: 'medium', value: results.medium_count },
+    { label: 'low', value: results.low_count },
+  ].filter((item) => item.value > 0)
+
   return (
     <div className="min-h-screen px-4 py-8 sm:px-6 lg:px-8">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-10">
@@ -152,6 +161,9 @@ export default function Results() {
             <p className="text-sm text-slate-500">
               Counts are based on completed scan findings.
             </p>
+            <h2 className="mt-1 text-xl font-semibold text-white">
+              What this scan found
+            </h2>
           </div>
 
           {/* Summary cards */}
