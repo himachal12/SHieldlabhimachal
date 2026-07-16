@@ -1,17 +1,21 @@
 """
 SQLMap integration subsystem for active web scanning.
 
-This module is the single execution path for SQLMap.  It is intentionally
-Windows-first: configured paths are normalized, quotes are stripped, commands
-are executed without a shell, output is captured, and subprocesses are bounded
-by explicit timeouts.
+This module is the single execution path for SQLMap. It is Windows-first and
+non-interactive by design: configured paths are normalized, commands are built
+as argv lists, stdin is disconnected, SQLMap is always launched with --batch,
+stdout/stderr are drained concurrently, and every subprocess is bounded by an
+explicit timeout.
 """
 
 from __future__ import annotations
 
 import json
+import queue
 import shutil
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -24,6 +28,7 @@ logger = get_logger("sqlmap_runner")
 
 DEFAULT_SQLMAP_TIMEOUT = 120
 SQLMAP_AVAILABILITY_TIMEOUT = 20
+SQLMAP_OUTPUT_LOG_LIMIT = 4000
 
 
 class SQLMapConfigurationError(RuntimeError):
@@ -118,19 +123,28 @@ def get_sqlmap_config() -> SQLMapConfig:
     return SQLMapConfig(sqlmap_path=sqlmap_path, python_executable=python_executable)
 
 
+def _append_noninteractive_flags(command: list[str]) -> list[str]:
+    """Force SQLMap into non-interactive mode for every invocation."""
+    if "--batch" not in command:
+        command.append("--batch")
+    if "--answers" not in command and not any(part.startswith("--answers=") for part in command):
+        # Accept the safe default for any prompt that still appears despite --batch.
+        command.extend(["--answers", "quit=N,follow=N,keep=N"])
+    return command
+
+
 def build_sqlmap_command(
     target_url: str,
     params: Sequence[str] | None = None,
     max_requests: int = 50,
 ) -> list[str]:
-    """Build the non-shell SQLMap command used for every active invocation."""
+    """Build the canonical non-shell SQLMap active-scan command."""
     config = get_sqlmap_config()
     command = [
         config.python_executable,
         config.sqlmap_path,
         "-u",
         target_url,
-        "--batch",
         "--output-format=json",
         f"--max-requests={max_requests}",
         "--level=1",
@@ -143,56 +157,130 @@ def build_sqlmap_command(
     ]
     if params:
         command.extend(["-p", ",".join(params)])
-    return command
+    return _append_noninteractive_flags(command)
+
+
+def build_sqlmap_availability_command(config: SQLMapConfig | None = None) -> list[str]:
+    """Build a non-interactive SQLMap smoke-test command."""
+    config = config or get_sqlmap_config()
+    return _append_noninteractive_flags([config.python_executable, config.sqlmap_path, "--version"])
+
+
+def _reader_thread(stream, stream_name: str, output_queue: queue.Queue[tuple[str, str]]) -> None:
+    """Drain a subprocess stream without blocking the main scanner thread."""
+    try:
+        for line in iter(stream.readline, ""):
+            if not line:
+                break
+            output_queue.put((stream_name, line))
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
 
 
 def execute_sqlmap(command: Sequence[str], timeout: int = DEFAULT_SQLMAP_TIMEOUT) -> SQLMapResult:
-    """Launch SQLMap once, capture output, and return structured diagnostics."""
-    printable = " ".join(f'"{part}"' if " " in part else part for part in command)
+    """
+    Launch SQLMap once, stream output concurrently, and return diagnostics.
+
+    stdin is always DEVNULL so SQLMap can never wait for keyboard input from
+    Uvicorn/WatchFiles. stdout and stderr are drained by separate daemon threads
+    to prevent pipe backpressure deadlocks on Windows.
+    """
+    final_command = _append_noninteractive_flags(list(command))
+    printable = " ".join(f'"{part}"' if " " in part else part for part in final_command)
     logger.info(f"Launching SQLMap: {printable}")
+
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+    output_queue: queue.Queue[tuple[str, str]] = queue.Queue()
+    process: subprocess.Popen[str] | None = None
+
     try:
-        completed = subprocess.run(
-            list(command),
-            capture_output=True,
+        process = subprocess.Popen(
+            final_command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
+            encoding="utf-8",
+            errors="replace",
             shell=False,
-            cwd=str(Path(command[1]).resolve().parent) if len(command) > 1 else None,
+            cwd=str(Path(final_command[1]).resolve().parent) if len(final_command) > 1 else None,
+            bufsize=1,
         )
-    except subprocess.TimeoutExpired as exc:
-        logger.error(f"SQLMap timed out after {timeout}s.")
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode(errors="replace")
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode(errors="replace")
-        return SQLMapResult(list(command), -1, stdout, stderr, timed_out=True, error="timeout")
     except OSError as exc:
         logger.error(f"SQLMap failed to start: {exc}")
-        return SQLMapResult(list(command), -1, "", str(exc), error=str(exc))
+        return SQLMapResult(final_command, -1, "", str(exc), error=str(exc))
 
-    logger.info(f"SQLMap exited with code {completed.returncode}.")
-    if completed.stdout:
-        logger.info(f"SQLMap stdout: {completed.stdout[:4000]}")
-    if completed.stderr:
-        logger.warning(f"SQLMap stderr: {completed.stderr[:4000]}")
-    if completed.returncode == 0:
+    readers = [
+        threading.Thread(target=_reader_thread, args=(process.stdout, "stdout", output_queue), daemon=True),
+        threading.Thread(target=_reader_thread, args=(process.stderr, "stderr", output_queue), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+
+    deadline = time.monotonic() + timeout
+    timed_out = False
+    while True:
+        while True:
+            try:
+                stream_name, line = output_queue.get_nowait()
+            except queue.Empty:
+                break
+            if stream_name == "stdout":
+                stdout_parts.append(line)
+            else:
+                stderr_parts.append(line)
+
+        if process.poll() is not None:
+            break
+        if time.monotonic() >= deadline:
+            timed_out = True
+            logger.error(f"SQLMap timed out after {timeout}s.")
+            process.kill()
+            break
+        time.sleep(0.05)
+
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+    for reader in readers:
+        reader.join(timeout=1)
+    while True:
+        try:
+            stream_name, line = output_queue.get_nowait()
+        except queue.Empty:
+            break
+        if stream_name == "stdout":
+            stdout_parts.append(line)
+        else:
+            stderr_parts.append(line)
+
+    stdout = "".join(stdout_parts)
+    stderr = "".join(stderr_parts)
+    returncode = process.returncode if process.returncode is not None else -1
+
+    logger.info(f"SQLMap exited with code {returncode}.")
+    if stdout:
+        logger.info(f"SQLMap stdout: {stdout[:SQLMAP_OUTPUT_LOG_LIMIT]}")
+    if stderr:
+        logger.warning(f"SQLMap stderr: {stderr[:SQLMAP_OUTPUT_LOG_LIMIT]}")
+    if timed_out:
+        return SQLMapResult(final_command, returncode, stdout, stderr, timed_out=True, error="timeout")
+    if returncode == 0:
         logger.info("SQLMap completed successfully.")
-
-    return SQLMapResult(
-        list(command), completed.returncode, completed.stdout or "", completed.stderr or ""
-    )
+    return SQLMapResult(final_command, returncode, stdout, stderr)
 
 
 def is_sqlmap_available() -> bool:
-    """Validate config and run a short SQLMap --version check."""
+    """Validate config and run a short non-interactive SQLMap smoke test."""
     try:
-        config = get_sqlmap_config()
-        result = execute_sqlmap(
-            [config.python_executable, config.sqlmap_path, "--version"],
-            timeout=SQLMAP_AVAILABILITY_TIMEOUT,
-        )
+        result = execute_sqlmap(build_sqlmap_availability_command(), timeout=SQLMAP_AVAILABILITY_TIMEOUT)
         if result.succeeded:
             return True
         logger.error(
@@ -208,17 +296,12 @@ def is_sqlmap_available() -> bool:
 def get_sqlmap_unavailable_reason() -> str | None:
     """Return a UI/log friendly reason when SQLMap cannot be launched."""
     try:
-        config = get_sqlmap_config()
-        result = execute_sqlmap(
-            [config.python_executable, config.sqlmap_path, "--version"],
-            timeout=SQLMAP_AVAILABILITY_TIMEOUT,
-        )
+        result = execute_sqlmap(build_sqlmap_availability_command(), timeout=SQLMAP_AVAILABILITY_TIMEOUT)
         if result.succeeded:
             return None
-        return (
-            f"SQLMap --version exited with code {result.returncode}. "
-            f"stderr: {(result.stderr or result.stdout)[:500]}"
-        )
+        reason_output = (result.stderr or result.stdout)[:500]
+        status = "timed out" if result.timed_out else f"exited with code {result.returncode}"
+        return f"SQLMap --version {status}. output: {reason_output}"
     except SQLMapConfigurationError as exc:
         return str(exc)
 
