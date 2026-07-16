@@ -110,65 +110,42 @@ export default function Results() {
   ].filter((item) => item.value > 0)
 
   return (
-    <div className="min-h-screen px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
-      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-8 sm:gap-10">
+    <div className="min-h-screen px-4 py-8 sm:px-6 lg:px-8">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-10">
 
         {/* Header */}
-        <header className="cyber-panel overflow-hidden p-0">
-          <div className="border-b border-slate-700/60 bg-gradient-to-r from-slate-950/80 via-slate-900/60 to-slate-950/40 px-5 py-4 sm:px-6">
-            <button
-              onClick={() => navigate('/')}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-700/80 bg-slate-950/70 px-3 py-2 text-sm font-semibold text-slate-300 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-500 hover:text-white"
-            >
-              <ArrowLeft size={16} />
-              Back to scanner
-            </button>
-          </div>
+        <header className="rounded-2xl border border-slate-700/70 bg-surface/80 p-5 shadow-panel backdrop-blur sm:p-6">
+          <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-start gap-4">
+              <button
+                onClick={() => navigate('/')}
+                className="mt-1 rounded-xl border border-slate-700 bg-slate-900/70 p-2 text-slate-400 transition-all hover:-translate-y-0.5 hover:border-slate-500 hover:text-white"
+                aria-label="Back to scanner"
+              >
+                <ArrowLeft size={18} />
+              </button>
 
-          <div className="p-5 sm:p-7 lg:p-8">
-            <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-              <div className="max-w-3xl">
-                <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-accent">
+              <div>
+                <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-accent">
                   <Shield size={16} />
                   Security Assessment
                 </div>
-
-                <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl lg:text-5xl">
+                <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
                   Scan Results
                 </h1>
-
-                <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400 sm:text-base">
-                  AI-powered vulnerability analysis and remediation recommendations based on the completed scan results.
-                </p>
-
-                <div className="mt-5 flex flex-wrap gap-2">
-                  {results.status && (
-                    <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em]
-                      ${results.status === 'completed'
-                        ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-300'
-                        : 'border-red-400/40 bg-red-500/10 text-red-300'
-                      }`}
-                    >
-                      {results.status}
-                    </span>
-                  )}
-
-                  {results.scan_type && (
-                    <span className="rounded-full border border-sky-400/40 bg-sky-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-sky-300">
-                      {results.scan_type} scan
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-700/80 bg-slate-950/60 px-5 py-4 shadow-inner lg:min-w-[300px]">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Scan ID
-                </p>
-                <p className="mt-1 break-all font-mono text-sm text-accent">
-                  {scanId}
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
+                  Prioritized vulnerabilities, exploitability context, attack chains, and remediation readiness for this scan.
                 </p>
               </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-700/80 bg-slate-950/50 px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Scan ID
+              </p>
+              <p className="mt-1 font-mono text-sm text-accent">
+                {scanId}
+              </p>
             </div>
           </div>
         </header>
@@ -187,11 +164,14 @@ export default function Results() {
             <p className="text-sm text-slate-500">
               Counts are based on completed scan findings.
             </p>
+            <h2 className="mt-1 text-xl font-semibold text-white">
+              What this scan found
+            </h2>
           </div>
 
           {/* Summary cards */}
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
-            <div className="col-span-2 rounded-2xl border border-slate-700/80 bg-gradient-to-br from-slate-900/95 to-slate-950/70 p-5 shadow-panel transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-500/80 md:col-span-1">
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+            <div className="col-span-2 rounded-2xl border border-slate-700/80 bg-surface/90 p-5 shadow-panel transition-all hover:-translate-y-0.5 hover:border-slate-600 md:col-span-1">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                 Risk Level
               </p>
@@ -222,15 +202,10 @@ export default function Results() {
                 value: results.medium_count,
                 color: 'text-yellow-400',
               },
-              {
-                label: 'Low',
-                value: results.low_count,
-                color: 'text-emerald-400',
-              },
             ].map((stat) => (
               <div
                 key={stat.label}
-                className="rounded-2xl border border-slate-700/80 bg-gradient-to-br from-slate-900/95 to-slate-950/70 p-5 shadow-panel transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-500/80"
+                className="rounded-2xl border border-slate-700/80 bg-surface/90 p-5 shadow-panel transition-all hover:-translate-y-0.5 hover:border-slate-600"
               >
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                   {stat.label}
@@ -244,53 +219,6 @@ export default function Results() {
           </div>
         </section>
 
-        {/* AI Executive Summary */}
-        <section className="space-y-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-              AI Executive Summary
-            </p>
-            <h2 className="mt-1 text-xl font-semibold text-white">
-              What this scan found
-            </h2>
-          </div>
-
-          <div className="rounded-2xl border border-slate-700/80 bg-gradient-to-br from-slate-900/90 to-slate-950/60 p-6 shadow-panel">
-            <div className="flex gap-4">
-              <div className="hidden h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border border-sky-400/30 bg-sky-500/10 sm:flex">
-                <Sparkles size={18} className="text-sky-300" />
-              </div>
-
-              <div className="space-y-3 text-sm leading-6 text-slate-300">
-                <p>
-                  This scan returned <span className="font-semibold text-white">{results.total_findings}</span> finding
-                  {results.total_findings !== 1 ? 's' : ''}
-                  {severitySummary.length > 0 && (
-                    <>
-                      {' '}across {severitySummary.map((item) => `${item.value} ${item.label}`).join(', ')} severity group
-                      {severitySummary.length !== 1 ? 's' : ''}
-                    </>
-                  )}.
-                </p>
-
-                {attackChainCount > 0 && (
-                  <p>
-                    The results include <span className="font-semibold text-red-300">{attackChainCount}</span> cross-domain attack chain
-                    {attackChainCount !== 1 ? 's' : ''}, indicating multiple findings may compound into higher risk.
-                  </p>
-                )}
-
-                {aiFixCount > 0 && (
-                  <p>
-                    <span className="font-semibold text-accent">{aiFixCount}</span> finding
-                    {aiFixCount !== 1 ? 's have' : ' has'} AI-generated remediation code available for review.
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        </section>
-
         {/* Charts & Analytics */}
         <section className="space-y-4">
           <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -298,8 +226,7 @@ export default function Results() {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
                 Charts & Analytics
               </p>
-              <h2 className="mt-1 flex items-center gap-2 text-xl font-semibold text-white">
-                <BarChart3 size={20} className="text-accent" />
+              <h2 className="mt-1 text-xl font-semibold text-white">
                 Severity distribution and filters
               </h2>
             </div>
@@ -310,7 +237,7 @@ export default function Results() {
 
           {/* Chart + Filter */}
           <div className="grid gap-5 lg:grid-cols-3">
-            <div className="lg:col-span-1">
+            <div className="lg:col-span-1 [&>div]:h-full [&>div]:rounded-2xl [&>div]:border-slate-700/80 [&>div]:bg-surface/90 [&>div]:shadow-panel">
               <SeverityChart results={results} />
             </div>
 
@@ -369,7 +296,7 @@ export default function Results() {
                 <div className="flex items-center gap-2 rounded-xl bg-slate-900/50 px-3 py-2 text-sm text-slate-400">
                   <TrendingUp size={14} />
                   <span>
-                    {aiFixCount} findings have AI-generated fixes
+                    {sorted.filter((f) => f.fixed_code).length} findings have AI-generated fixes
                   </span>
                 </div>
 
@@ -465,11 +392,7 @@ export default function Results() {
         {/* Auto-PR Panel — only for code/combined scans */}
         {results.scan_type !== 'web' && (
           <section className="space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="mt-1 rounded-xl border border-sky-400/30 bg-sky-500/10 p-2">
-                <GitPullRequest size={18} className="text-sky-300" />
-              </div>
-              <div>
+            <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
                 Remediation
               </p>
@@ -479,7 +402,6 @@ export default function Results() {
               <p className="mt-1 text-sm text-slate-500">
                 Apply eligible AI-generated fixes to the scanned repository.
               </p>
-              </div>
             </div>
 
             <AutoPRPanel
