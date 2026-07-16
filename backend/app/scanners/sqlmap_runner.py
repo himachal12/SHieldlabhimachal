@@ -146,7 +146,7 @@ def build_sqlmap_command(
         "-u",
         target_url,
 
-        f"--max-requests={max_requests}",
+        
         "--level=1",
         "--risk=1",
         "--timeout=10",
