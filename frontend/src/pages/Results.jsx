@@ -131,27 +131,8 @@ export default function Results() {
                   Scan Results
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
-                  AI-powered vulnerability analysis and remediation recommendations based on the completed scan results.
+                  Prioritized vulnerabilities, exploitability context, attack chains, and remediation readiness for this scan.
                 </p>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {results.status && (
-                    <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em]
-                      ${results.status === 'completed'
-                        ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-300'
-                        : 'border-red-400/40 bg-red-500/10 text-red-300'
-                      }`}
-                    >
-                      {results.status}
-                    </span>
-                  )}
-
-                  {results.scan_type && (
-                    <span className="rounded-full border border-sky-400/40 bg-sky-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-sky-300">
-                      {results.scan_type} scan
-                    </span>
-                  )}
-                </div>
               </div>
             </div>
 
@@ -180,6 +161,9 @@ export default function Results() {
             <p className="text-sm text-slate-500">
               Counts are based on completed scan findings.
             </p>
+            <h2 className="mt-1 text-xl font-semibold text-white">
+              What this scan found
+            </h2>
           </div>
 
           {/* Summary cards */}
@@ -229,47 +213,6 @@ export default function Results() {
                 </p>
               </div>
             ))}
-          </div>
-        </section>
-
-        {/* AI Executive Summary */}
-        <section className="space-y-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-              AI Executive Summary
-            </p>
-            <h2 className="mt-1 text-xl font-semibold text-white">
-              What this scan found
-            </h2>
-          </div>
-
-          <div className="rounded-2xl border border-slate-700/80 bg-surface/90 p-6 shadow-panel">
-            <div className="space-y-3 text-sm leading-6 text-slate-300">
-              <p>
-                This scan returned <span className="font-semibold text-white">{results.total_findings}</span> finding
-                {results.total_findings !== 1 ? 's' : ''}
-                {severitySummary.length > 0 && (
-                  <>
-                    {' '}across {severitySummary.map((item) => `${item.value} ${item.label}`).join(', ')} severity group
-                    {severitySummary.length !== 1 ? 's' : ''}
-                  </>
-                )}.
-              </p>
-
-              {attackChainCount > 0 && (
-                <p>
-                  The results include <span className="font-semibold text-red-300">{attackChainCount}</span> cross-domain attack chain
-                  {attackChainCount !== 1 ? 's' : ''}, indicating multiple findings may compound into higher risk.
-                </p>
-              )}
-
-              {aiFixCount > 0 && (
-                <p>
-                  <span className="font-semibold text-accent">{aiFixCount}</span> finding
-                  {aiFixCount !== 1 ? 's have' : ' has'} AI-generated remediation code available for review.
-                </p>
-              )}
-            </div>
           </div>
         </section>
 
@@ -350,7 +293,7 @@ export default function Results() {
                 <div className="flex items-center gap-2 rounded-xl bg-slate-900/50 px-3 py-2 text-sm text-slate-400">
                   <TrendingUp size={14} />
                   <span>
-                    {aiFixCount} findings have AI-generated fixes
+                    {sorted.filter((f) => f.fixed_code).length} findings have AI-generated fixes
                   </span>
                 </div>
 
