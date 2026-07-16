@@ -46,7 +46,7 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType }) {
 
       setResult(data)
 
-    } catch (err) {
+    } catch {
       setError('Network error — is the backend running?')
     } finally {
       setLoading(false)

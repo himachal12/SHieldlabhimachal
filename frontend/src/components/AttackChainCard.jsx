@@ -1,94 +1,97 @@
 import { useState } from 'react'
-import { 
-  Link2, ChevronDown, ChevronUp, 
-  Clock, Zap, AlertOctagon 
+import {
+  AlertOctagon,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Link2,
+  Route,
+  Zap,
 } from 'lucide-react'
 import SeverityBadge from './SeverityBadge'
 
 export default function AttackChainCard({ chain, index }) {
-  const [expanded, setExpanded] = useState(true) // open by default -- this is your headline feature
+  const [expanded, setExpanded] = useState(true)
 
   return (
-    <div className="bg-red-950/30 border border-red-500/50 rounded-xl overflow-hidden mb-4">
-      
-      {/* Header */}
+    <div className="attack-chain-card mb-4 overflow-hidden">
       <button
-        className="w-full text-left p-4 flex items-center gap-3"
+        className="w-full p-4 text-left transition-colors hover:bg-red-500/[0.035]"
         onClick={() => setExpanded(!expanded)}
       >
-        {/* Chain icon */}
-        <div className="bg-red-500/20 p-2 rounded-lg flex-shrink-0">
-          <Link2 size={18} className="text-red-400" />
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-bold text-white text-sm">
-              Attack Chain #{index + 1}
-            </span>
-            <SeverityBadge severity={chain.severity} />
+        <div className="flex flex-col gap-4 md:flex-row md:items-center">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="grid h-11 w-11 flex-shrink-0 place-items-center rounded-2xl border border-red-300/25 bg-red-500/10 text-red-200">
+              <Link2 size={20} />
+            </div>
+            <div className="min-w-0">
+              <div className="mb-1 flex flex-wrap items-center gap-2">
+                <span className="font-black text-white">Threat Path #{index + 1}</span>
+                <SeverityBadge severity={chain.severity} />
+              </div>
+              <p className="truncate text-xs text-slate-400">
+                {chain.finding_types?.join(' + ') || 'Multiple findings compound'}
+              </p>
+            </div>
           </div>
-          <p className="text-xs text-slate-400 mt-0.5">
-            {chain.finding_types?.join(' + ') || 'Multiple findings compound'}
-          </p>
-        </div>
 
-        {/* Quick stats */}
-        <div className="flex items-center gap-3 flex-shrink-0">
-          <div className="flex items-center gap-1 text-orange-400 text-xs">
-            <Clock size={12} />
-            <span>{chain.time_to_exploit}</span>
+          <div className="flex items-center gap-3 md:flex-shrink-0">
+            {chain.time_to_exploit && (
+              <div className="inline-flex items-center gap-1.5 rounded-full border border-orange-300/20 bg-orange-400/10 px-3 py-1.5 text-xs font-semibold text-orange-200">
+                <Clock size={13} />
+                {chain.time_to_exploit}
+              </div>
+            )}
+            {expanded
+              ? <ChevronUp size={18} className="text-slate-400" />
+              : <ChevronDown size={18} className="text-slate-400" />
+            }
           </div>
-          {expanded
-            ? <ChevronUp size={16} className="text-slate-400" />
-            : <ChevronDown size={16} className="text-slate-400" />
-          }
         </div>
       </button>
 
-      {/* Expanded content */}
       {expanded && (
-        <div className="px-4 pb-4 border-t border-red-500/20 space-y-4 pt-3">
-
-          {/* Attack chain steps */}
+        <div className="space-y-4 border-t border-red-300/15 px-4 pb-4 pt-4">
           {chain.attack_chain && chain.attack_chain.length > 0 && (
-            <div>
-              <div className="flex items-center gap-2 mb-3">
-                <Zap size={14} className="text-yellow-400" />
-                <span className="text-xs font-bold text-yellow-400 uppercase tracking-wide">
-                  Attack Path
-                </span>
+            <section>
+              <div className="mb-3 flex items-center gap-2 text-xs font-black uppercase tracking-[0.18em] text-yellow-300">
+                <Route size={14} />
+                Attack path
               </div>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {chain.attack_chain.map((step, i) => (
-                  <div key={i} className="flex gap-3">
-                    {/* Step number */}
-                    <div className="flex-shrink-0 w-6 h-6 rounded-full bg-red-500/30
-                                    border border-red-500/50 flex items-center justify-center">
-                      <span className="text-xs font-bold text-red-400">{i + 1}</span>
+                  <div key={i} className="flex gap-3 rounded-2xl border border-white/10 bg-black/20 p-3">
+                    <div className="grid h-7 w-7 flex-shrink-0 place-items-center rounded-full border border-red-300/35 bg-red-500/15 text-xs font-black text-red-200">
+                      {i + 1}
                     </div>
-                    <p className="text-sm text-slate-300 pt-0.5 leading-relaxed">
+                    <p className="pt-0.5 text-sm leading-6 text-slate-300">
                       {step.replace(/^Step \d+:\s*/i, '')}
                     </p>
                   </div>
                 ))}
               </div>
-            </div>
+            </section>
           )}
 
-          {/* Impact */}
           {chain.impact && (
-            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-              <div className="flex items-center gap-2 mb-1">
-                <AlertOctagon size={14} className="text-red-400" />
-                <span className="text-xs font-bold text-red-400 uppercase tracking-wide">
-                  Worst-Case Impact
-                </span>
+            <section className="rounded-2xl border border-red-300/25 bg-red-500/10 p-4">
+              <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase tracking-[0.18em] text-red-200">
+                <AlertOctagon size={14} />
+                Worst-case impact
               </div>
-              <p className="text-sm text-red-300">{chain.impact}</p>
-            </div>
+              <p className="text-sm leading-6 text-red-100/90">{chain.impact}</p>
+            </section>
           )}
 
+          {chain.reasoning && (
+            <section className="rounded-2xl border border-yellow-300/15 bg-yellow-400/10 p-4">
+              <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase tracking-[0.18em] text-yellow-200">
+                <Zap size={14} />
+                Reasoning
+              </div>
+              <p className="text-sm leading-6 text-yellow-100/90">{chain.reasoning}</p>
+            </section>
+          )}
         </div>
       )}
     </div>

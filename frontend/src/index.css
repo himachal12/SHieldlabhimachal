@@ -153,3 +153,391 @@ pre {
     @apply text-xs font-semibold uppercase tracking-[0.18em] text-slate-500;
   }
 }
+
+@keyframes cyber-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(3rem, -2rem, 0) scale(1.08); }
+}
+
+@keyframes cyber-grid-pan {
+  from { background-position: 0 0, 0 0; }
+  to { background-position: 72px 72px, 72px 72px; }
+}
+
+@keyframes scanline-sweep {
+  0% { transform: translateY(-100%); opacity: 0; }
+  18% { opacity: 0.34; }
+  100% { transform: translateY(100vh); opacity: 0; }
+}
+
+@keyframes scanner-beam {
+  0% { transform: translateX(-110%); opacity: 0; }
+  22% { opacity: 0.55; }
+  100% { transform: translateX(110%); opacity: 0; }
+}
+
+@keyframes shimmer {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(120%); }
+}
+
+@keyframes progress-pan {
+  from { background-position: 0 0; }
+  to { background-position: 42px 0; }
+}
+
+@keyframes spin-slow {
+  to { transform: rotate(360deg); }
+}
+
+.cyber-screen {
+  position: relative;
+  background:
+    radial-gradient(circle at 12% 8%, rgba(56, 189, 248, 0.14), transparent 25rem),
+    radial-gradient(circle at 88% 14%, rgba(139, 92, 246, 0.14), transparent 28rem),
+    radial-gradient(circle at 50% 100%, rgba(20, 184, 166, 0.08), transparent 32rem),
+    linear-gradient(180deg, #030712 0%, #06111f 46%, #030712 100%);
+}
+
+.cyber-screen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(56, 189, 248, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 189, 248, 0.04) 1px, transparent 1px);
+  background-size: 72px 72px;
+  mask-image: radial-gradient(circle at center, black 0%, transparent 74%);
+  animation: cyber-grid-pan 28s linear infinite;
+}
+
+.cyber-screen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, rgba(56, 189, 248, 0.035), transparent);
+  mix-blend-mode: screen;
+  animation: scanline-sweep 7s ease-in-out infinite;
+}
+
+.cyber-grid,
+.cyber-scanline,
+.cyber-orb {
+  pointer-events: none;
+  position: absolute;
+}
+
+.cyber-grid {
+  inset: 0;
+  background:
+    radial-gradient(circle at center, rgba(56, 189, 248, 0.08), transparent 34rem),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 4px);
+  opacity: 0.48;
+}
+
+.cyber-scanline {
+  inset: 0;
+  background: radial-gradient(circle at 50% 42%, transparent 0 9rem, rgba(56, 189, 248, 0.04) 9.2rem, transparent 18rem);
+}
+
+.cyber-orb {
+  filter: blur(72px);
+  opacity: 0.65;
+  animation: cyber-drift 14s ease-in-out infinite;
+}
+
+.cyber-orb-cyan {
+  left: -6rem;
+  top: 8rem;
+  height: 19rem;
+  width: 19rem;
+  background: rgba(56, 189, 248, 0.2);
+}
+
+.cyber-orb-violet {
+  bottom: 4rem;
+  right: -5rem;
+  height: 22rem;
+  width: 22rem;
+  background: rgba(139, 92, 246, 0.2);
+  animation-delay: -6s;
+}
+
+.cyber-command-panel,
+.scan-console {
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1.75rem;
+  background:
+    linear-gradient(145deg, rgba(15, 23, 42, 0.74), rgba(2, 6, 23, 0.86)),
+    radial-gradient(circle at 12% 0%, rgba(56, 189, 248, 0.12), transparent 20rem);
+  box-shadow:
+    0 28px 90px -42px rgba(0, 0, 0, 0.94),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(24px);
+}
+
+.cyber-command-panel::before,
+.scan-console::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(120deg, transparent 0%, rgba(56, 189, 248, 0.1) 42%, transparent 58%);
+  transform: translateX(-120%);
+  animation: shimmer 8s ease-in-out infinite;
+}
+
+.scan-mode-card {
+  position: relative;
+  min-height: 14rem;
+  overflow: hidden;
+  border-radius: 1.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background:
+    linear-gradient(145deg, rgba(15, 23, 42, 0.58), rgba(2, 6, 23, 0.72)),
+    radial-gradient(circle at 0% 0%, rgba(255, 255, 255, 0.05), transparent 16rem);
+  padding: 1.25rem;
+  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1), border-color 220ms ease, box-shadow 220ms ease, background 220ms ease;
+}
+
+.scan-mode-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+
+.scan-mode-card:hover,
+.scan-mode-card.is-selected {
+  transform: translateY(-4px);
+  border-color: rgba(56, 189, 248, 0.26);
+  box-shadow: 0 24px 60px -34px rgba(56, 189, 248, 0.95);
+}
+
+.scan-mode-card:hover::before,
+.scan-mode-card.is-selected::before {
+  opacity: 1;
+}
+
+.scan-mode-cyan::before { background: radial-gradient(circle at 20% 0%, rgba(56, 189, 248, 0.18), transparent 15rem); }
+.scan-mode-teal::before { background: radial-gradient(circle at 20% 0%, rgba(20, 184, 166, 0.18), transparent 15rem); }
+.scan-mode-violet::before { background: radial-gradient(circle at 20% 0%, rgba(139, 92, 246, 0.2), transparent 15rem); }
+
+.scan-mode-icon {
+  display: grid;
+  height: 2.5rem;
+  width: 2.5rem;
+  place-items: center;
+  border-radius: 1rem;
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  background: rgba(56, 189, 248, 0.08);
+  color: #bae6fd;
+}
+
+.cyber-field-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border-radius: 1.15rem;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(2, 6, 23, 0.58);
+  padding: 0 1rem;
+  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}
+
+.cyber-field-wrap:focus-within {
+  border-color: rgba(56, 189, 248, 0.5);
+  background: rgba(2, 6, 23, 0.78);
+  box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.1), 0 0 42px -24px rgba(56, 189, 248, 0.9);
+}
+
+.cyber-field {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 1rem 0;
+  color: white;
+  outline: none;
+}
+
+.cyber-field::placeholder {
+  color: rgba(100, 116, 139, 0.92);
+}
+
+.active-scan-panel {
+  overflow: hidden;
+  border-radius: 1.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(2, 6, 23, 0.42);
+  transition: border-color 220ms ease, box-shadow 220ms ease;
+}
+
+.active-scan-panel.is-armed {
+  border-color: rgba(251, 146, 60, 0.24);
+  box-shadow: 0 22px 58px -42px rgba(249, 115, 22, 0.85);
+}
+
+.cyber-launch-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  overflow: hidden;
+  border-radius: 1rem;
+  background: linear-gradient(135deg, #38bdf8 0%, #60a5fa 45%, #a78bfa 100%);
+  padding: 0.95rem 1.15rem;
+  font-weight: 900;
+  color: #030712;
+  box-shadow: 0 0 0 1px rgba(186, 230, 253, 0.26), 0 24px 54px -30px rgba(56, 189, 248, 0.95);
+  transition: transform 180ms ease, filter 180ms ease, opacity 180ms ease;
+}
+
+.cyber-launch-button::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 0%, rgba(255, 255, 255, 0.48) 46%, transparent 58%);
+  transform: translateX(-120%);
+  transition: transform 600ms ease;
+}
+
+.cyber-launch-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  filter: brightness(1.08);
+}
+
+.cyber-launch-button:hover:not(:disabled)::before {
+  transform: translateX(120%);
+}
+
+.cyber-launch-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.scan-console {
+  border-radius: 1.5rem;
+}
+
+.scan-console.is-failed {
+  border-color: rgba(248, 113, 113, 0.26);
+}
+
+.scan-console.is-complete {
+  border-color: rgba(74, 222, 128, 0.24);
+}
+
+.scanner-beam {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(56, 189, 248, 0.12) 45%, transparent 58%);
+  animation: scanner-beam 4.5s ease-in-out infinite;
+}
+
+.progress-stripes {
+  background-size: 42px 42px;
+  background-image:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.16) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.16) 50%, rgba(255, 255, 255, 0.16) 75%, transparent 75%, transparent),
+    linear-gradient(90deg, #22d3ee, #60a5fa, #a78bfa);
+  animation: progress-pan 1.2s linear infinite;
+}
+
+.animate-spin-slow {
+  animation: spin-slow 4s linear infinite;
+}
+
+.result-stat-card {
+  display: flex;
+  min-height: 5.8rem;
+  flex-direction: column;
+  justify-content: space-between;
+  border-radius: 1.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(2, 6, 23, 0.42);
+  padding: 1rem;
+  text-align: left;
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+}
+
+.result-stat-card span {
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.78);
+}
+
+.result-stat-card strong {
+  font-size: 1.8rem;
+  line-height: 1;
+  color: #f8fafc;
+}
+
+.result-stat-card:hover,
+.result-stat-card.is-selected {
+  transform: translateY(-2px);
+  border-color: rgba(56, 189, 248, 0.3);
+  background: rgba(56, 189, 248, 0.08);
+  box-shadow: 0 20px 50px -34px rgba(56, 189, 248, 0.9);
+}
+
+.result-stat-card.severity-critical strong { color: #fda4af; }
+.result-stat-card.severity-high strong { color: #fdba74; }
+.result-stat-card.severity-medium strong { color: #fde68a; }
+.result-stat-card.severity-low strong { color: #86efac; }
+.result-stat-card.severity-info strong { color: #93c5fd; }
+
+.result-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(2, 6, 23, 0.42);
+  padding: 0.55rem 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #cbd5e1;
+  transition: border-color 180ms ease, background 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+.result-toggle:hover,
+.result-toggle.is-active {
+  transform: translateY(-1px);
+  border-color: rgba(56, 189, 248, 0.3);
+  background: rgba(56, 189, 248, 0.1);
+  color: #e0f2fe;
+}
+
+.finding-card {
+  border-radius: 1.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(145deg, rgba(15, 23, 42, 0.66), rgba(2, 6, 23, 0.78)),
+    radial-gradient(circle at 10% 0%, rgba(56, 189, 248, 0.07), transparent 18rem);
+  box-shadow: 0 18px 48px -36px rgba(0, 0, 0, 0.85);
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.finding-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(56, 189, 248, 0.22);
+  box-shadow: 0 22px 58px -38px rgba(56, 189, 248, 0.75);
+}
+
+.attack-chain-card {
+  border-radius: 1.35rem;
+  border: 1px solid rgba(248, 113, 113, 0.22);
+  background:
+    linear-gradient(145deg, rgba(69, 10, 10, 0.34), rgba(2, 6, 23, 0.82)),
+    radial-gradient(circle at 8% 0%, rgba(248, 113, 113, 0.14), transparent 18rem);
+  box-shadow: 0 22px 58px -40px rgba(248, 113, 113, 0.85);
+}
