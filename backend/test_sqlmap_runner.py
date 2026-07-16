@@ -26,16 +26,58 @@ def sqlmap_config(tmp_path, monkeypatch):
     return sqlmap, python
 
 
+class _FakeStream:
+    def __init__(self, text):
+        self._lines = text.splitlines(True)
+
+    def readline(self):
+        if self._lines:
+            return self._lines.pop(0)
+        return ""
+
+    def close(self):
+        pass
+
+
+class _FakeProcess:
+    def __init__(self, stdout="", stderr="", returncode=0, never_exits=False):
+        self.stdout = _FakeStream(stdout)
+        self.stderr = _FakeStream(stderr)
+        self.returncode = returncode
+        self._never_exits = never_exits
+        self.killed = False
+
+    def poll(self):
+        if self._never_exits and not self.killed:
+            return None
+        return self.returncode
+
+    def kill(self):
+        self.killed = True
+        self.returncode = -9
+
+    def wait(self, timeout=None):
+        if self._never_exits and not self.killed:
+            raise subprocess.TimeoutExpired("cmd", timeout)
+        return self.returncode
+
+
+def _popen_factory(stdout="", stderr="", returncode=0, never_exits=False):
+    return Mock(return_value=_FakeProcess(stdout, stderr, returncode, never_exits))
+
+
 def test_successful_launch(sqlmap_config, monkeypatch):
-    completed = subprocess.CompletedProcess(["cmd"], 0, "1.7.0\n", "")
-    run = Mock(return_value=completed)
-    monkeypatch.setattr(sqlmap_runner.subprocess, "run", run)
+    popen = _popen_factory(stdout="1.7.0\n", returncode=0)
+    monkeypatch.setattr(sqlmap_runner.subprocess, "Popen", popen)
 
     assert sqlmap_runner.is_sqlmap_available() is True
-    command = run.call_args.args[0]
+    command = popen.call_args.args[0]
     assert command[0].endswith("python.exe")
     assert command[1].endswith("sqlmap.py")
-    assert run.call_args.kwargs["shell"] is False
+    assert "--version" in command
+    assert "--batch" in command
+    assert popen.call_args.kwargs["shell"] is False
+    assert popen.call_args.kwargs["stdin"] is subprocess.DEVNULL
 
 
 def test_invalid_sqlmap_path(sqlmap_config, monkeypatch, tmp_path):
@@ -53,22 +95,20 @@ def test_invalid_sqlmap_python(sqlmap_config, monkeypatch, tmp_path):
 
 
 def test_timeout(sqlmap_config, monkeypatch):
-    def timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"], output="partial")
-
-    monkeypatch.setattr(sqlmap_runner.subprocess, "run", timeout)
-    result = sqlmap_runner.execute_sqlmap(sqlmap_runner.build_sqlmap_command("http://a.test/?id=1"), timeout=1)
+    popen = _popen_factory(stdout="partial\n", returncode=None, never_exits=True)
+    monkeypatch.setattr(sqlmap_runner.subprocess, "Popen", popen)
+    result = sqlmap_runner.execute_sqlmap(sqlmap_runner.build_sqlmap_command("http://a.test/?id=1"), timeout=0)
 
     assert result.timed_out is True
     assert result.error == "timeout"
-    assert result.stdout == "partial"
+    assert result.stdout == "partial\n"
 
 
 def test_subprocess_failure(sqlmap_config, monkeypatch):
     def fail(*args, **kwargs):
         raise OSError("boom")
 
-    monkeypatch.setattr(sqlmap_runner.subprocess, "run", fail)
+    monkeypatch.setattr(sqlmap_runner.subprocess, "Popen", fail)
     result = sqlmap_runner.execute_sqlmap(sqlmap_runner.build_sqlmap_command("http://a.test/?id=1"))
 
     assert result.error == "boom"
@@ -80,8 +120,24 @@ def test_windows_paths_with_spaces(sqlmap_config):
 
     assert "Python Folder" in command[0]
     assert "sqlmap folder" in command[1]
-    assert command[-2:] == ["-p", "q"]
+    assert command[command.index("-p") + 1] == "q"
+    assert "--batch" in command
+    assert "--answers" in command
     assert "--max-requests=7" in command
+    assert "--output-format=json" not in command
+
+
+def test_parse_text_output_detects_confirmed_sqli():
+    findings = sqlmap_runner._parse_sqlmap_output(
+        "Parameter: q (GET)\n    Type: boolean-based blind\n    Title: AND boolean-based blind - WHERE or HAVING clause\n",
+        "",
+        "http://a.test/search?q=1",
+    )
+
+    assert len(findings) == 1
+    assert findings[0]["source"] == "sqlmap_active"
+    assert findings[0]["severity"] == "CRITICAL"
+    assert "q" in findings[0]["description"]
 
 
 def test_active_scan_uses_sqlmap_launcher(monkeypatch):
