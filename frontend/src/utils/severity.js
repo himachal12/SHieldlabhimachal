@@ -5,38 +5,38 @@
 
 export const SEVERITY_COLORS = {
   CRITICAL: {
-    bg: 'bg-red-500/20',
-    border: 'border-red-500',
-    text: 'text-red-400',
-    badge: 'bg-red-500',
-    hex: '#ef4444'
+    bg: 'bg-rose-500/15',
+    border: 'border-rose-400/60',
+    text: 'text-rose-300',
+    badge: 'bg-rose-500/15 border border-rose-400/50 text-rose-200 shadow-glow-critical',
+    hex: '#f43f5e'
   },
   HIGH: {
-    bg: 'bg-orange-500/20',
-    border: 'border-orange-500',
-    text: 'text-orange-400',
-    badge: 'bg-orange-500',
+    bg: 'bg-orange-500/15',
+    border: 'border-orange-400/60',
+    text: 'text-orange-300',
+    badge: 'bg-orange-500/15 border border-orange-400/50 text-orange-200',
     hex: '#f97316'
   },
   MEDIUM: {
-    bg: 'bg-yellow-500/20',
-    border: 'border-yellow-500',
-    text: 'text-yellow-400',
-    badge: 'bg-yellow-500',
-    hex: '#eab308'
+    bg: 'bg-amber-500/15',
+    border: 'border-amber-400/60',
+    text: 'text-amber-300',
+    badge: 'bg-amber-500/15 border border-amber-400/50 text-amber-200',
+    hex: '#f59e0b'
   },
   LOW: {
-    bg: 'bg-green-500/20',
-    border: 'border-green-500',
-    text: 'text-green-400',
-    badge: 'bg-green-500',
+    bg: 'bg-emerald-500/15',
+    border: 'border-emerald-400/60',
+    text: 'text-emerald-300',
+    badge: 'bg-emerald-500/15 border border-emerald-400/50 text-emerald-200',
     hex: '#22c55e'
   },
   INFO: {
-    bg: 'bg-blue-500/20',
-    border: 'border-blue-500',
-    text: 'text-blue-400',
-    badge: 'bg-blue-500',
+    bg: 'bg-sky-500/15',
+    border: 'border-sky-400/60',
+    text: 'text-sky-300',
+    badge: 'bg-sky-500/15 border border-sky-400/50 text-sky-200',
     hex: '#38bdf8'
   }
 }
@@ -53,8 +53,8 @@ export const cvssToSeverity = (score) => {
 }
 
 export const cvssColor = (score) => {
-  if (score >= 9.0) return '#ef4444'
+  if (score >= 9.0) return '#f43f5e'
   if (score >= 7.0) return '#f97316'
-  if (score >= 4.0) return '#eab308'
+  if (score >= 4.0) return '#f59e0b'
   return '#22c55e'
 }
