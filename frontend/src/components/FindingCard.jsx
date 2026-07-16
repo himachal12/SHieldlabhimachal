@@ -15,12 +15,11 @@ export default function FindingCard({ finding }) {
 
   return (
     <div
-      className="bg-surface border border-slate-700 rounded-xl overflow-hidden mb-3
-                 hover:border-slate-500 transition-colors"
+      className="mb-3 overflow-hidden rounded-2xl border border-slate-700/80 bg-gradient-to-br from-slate-900/95 to-slate-950/60 shadow-panel transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-500/80"
     >
       {/* Summary row */}
       <button
-        className="w-full text-left p-4 flex items-center gap-3"
+        className="flex w-full items-center gap-3 p-4 text-left sm:p-5"
         onClick={() => setExpanded(!expanded)}
       >
         <SeverityBadge severity={finding.severity} />
@@ -38,11 +37,11 @@ export default function FindingCard({ finding }) {
         )}
 
         <div className="flex-1 min-w-0">
-          <p className="font-semibold text-white truncate">
+          <p className="truncate font-semibold text-white">
             {finding.vuln_type}
           </p>
 
-          <p className="text-sm text-slate-400 truncate">
+          <p className="mt-1 truncate font-mono text-xs text-slate-400 sm:text-sm">
             {finding.file_path
               ? `${finding.file_path}${
                   finding.line_number ? `:${finding.line_number}` : ''
@@ -68,7 +67,7 @@ export default function FindingCard({ finding }) {
 
       {/* Expanded Details */}
       {expanded && (
-        <div className="px-4 pb-4 border-t border-slate-700 space-y-4">
+        <div className="space-y-4 border-t border-slate-700/70 bg-slate-950/25 px-4 pb-4 sm:px-5 sm:pb-5">
 
           {/* Description */}
           <div className="pt-3">
@@ -111,7 +110,7 @@ export default function FindingCard({ finding }) {
 
           {/* Fix Explanation */}
           {finding.fix_explanation && (
-            <div className="bg-slate-800 rounded-lg p-3">
+            <div className="rounded-xl border border-slate-700/70 bg-slate-900/70 p-3">
               <p className="text-xs text-slate-300 leading-relaxed">
                 {finding.fix_explanation}
               </p>

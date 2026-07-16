@@ -1,6 +1,5 @@
 import AutoPRPanel from '../components/AutoPRPanel'
 import AttackChainCard from '../components/AttackChainCard'
-import { Link2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
@@ -9,6 +8,10 @@ import {
   ArrowLeft,
   Filter,
   TrendingUp,
+  Link2,
+  BarChart3,
+  Sparkles,
+  GitPullRequest,
 } from 'lucide-react'
 import { getScanResults } from '../api/client'
 import FindingCard from '../components/FindingCard'
