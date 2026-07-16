@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { AlertTriangle, Plus, X, ShieldAlert } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Plus, ShieldAlert, X } from 'lucide-react'
 
-export default function ActiveScanConsent({ 
-  enabled, 
-  onToggle, 
-  consentGiven, 
+export default function ActiveScanConsent({
+  enabled,
+  onToggle,
+  consentGiven,
   onConsentChange,
   activeUrls,
   onUrlsChange
@@ -24,111 +24,91 @@ export default function ActiveScanConsent({
   }
 
   return (
-    <div className="border border-slate-600 rounded-xl overflow-hidden">
-      
-      {/* Toggle row */}
+    <div className={`active-scan-panel ${enabled ? 'is-armed' : ''}`}>
       <button
         onClick={onToggle}
-        className="w-full flex items-center justify-between p-4
-                   bg-slate-800 hover:bg-slate-750 transition-colors"
+        className="flex w-full items-center justify-between gap-4 p-4 text-left transition-colors hover:bg-white/[0.035]"
       >
         <div className="flex items-center gap-3">
-          <ShieldAlert 
-            size={18} 
-            className={enabled ? 'text-orange-400' : 'text-slate-500'} 
-          />
-          <div className="text-left">
-            <p className={`text-sm font-semibold ${enabled ? 'text-orange-400' : 'text-slate-400'}`}>
-              Active Scanning (sqlmap SQLi testing)
-            </p>
-            <p className="text-xs text-slate-500">
-              Sends real attack payloads — only use on targets you own
+          <div className={`grid h-10 w-10 place-items-center rounded-2xl border ${enabled ? 'border-orange-300/35 bg-orange-400/15 text-orange-200' : 'border-slate-600/60 bg-slate-800/60 text-slate-500'}`}>
+            <ShieldAlert size={19} />
+          </div>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className={`text-sm font-black uppercase tracking-[0.16em] ${enabled ? 'text-orange-200' : 'text-slate-400'}`}>
+                Active payload mode
+              </p>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-black tracking-widest ${enabled ? 'bg-orange-400/15 text-orange-200' : 'bg-slate-700/50 text-slate-500'}`}>
+                {enabled ? 'ARMED' : 'PASSIVE'}
+              </span>
+            </div>
+            <p className="mt-1 text-xs leading-5 text-slate-500">
+              sqlmap SQLi testing sends real payloads — only use on targets you own.
             </p>
           </div>
         </div>
 
-        {/* Toggle pill */}
-        <div className={`
-          w-11 h-6 rounded-full transition-colors relative flex-shrink-0
-          ${enabled ? 'bg-orange-500' : 'bg-slate-600'}
-        `}>
-          <div className={`
-            absolute top-1 w-4 h-4 rounded-full bg-white transition-transform
-            ${enabled ? 'translate-x-6' : 'translate-x-1'}
-          `}/>
+        <div className={`relative h-7 w-12 flex-shrink-0 rounded-full border transition-all ${enabled ? 'border-orange-200/40 bg-orange-500 shadow-[0_0_28px_rgba(249,115,22,0.24)]' : 'border-slate-500/40 bg-slate-700'}`}>
+          <div className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-lg transition-transform ${enabled ? 'translate-x-6' : 'translate-x-1'}`} />
         </div>
       </button>
 
-      {/* Active scan details (only when enabled) */}
       {enabled && (
-        <div className="p-4 border-t border-slate-600 space-y-4 bg-orange-950/20">
-          
-          {/* Warning banner */}
-          <div className="flex gap-2 bg-orange-500/10 border border-orange-500/30
-                          rounded-lg p-3">
-            <AlertTriangle size={16} className="text-orange-400 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-orange-300 leading-relaxed">
-              Active scanning sends real SQL injection payloads to the target.
-              This is legal only on systems you own or have explicit written 
-              permission to test. Unauthorized scanning may violate laws.
+        <div className="space-y-4 border-t border-orange-300/15 bg-orange-950/20 p-4">
+          <div className="flex gap-3 rounded-2xl border border-orange-400/25 bg-orange-400/10 p-3">
+            <AlertTriangle size={17} className="mt-0.5 flex-shrink-0 text-orange-300" />
+            <p className="text-xs leading-6 text-orange-100/90">
+              Active scanning sends real SQL injection payloads to the target. This is legal only on systems you own or have explicit written permission to test. Unauthorized scanning may violate laws.
             </p>
           </div>
 
-          {/* Consent checkbox */}
-          <label className="flex items-start gap-3 cursor-pointer">
+          <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-white/10 bg-black/20 p-3 transition-colors hover:bg-white/[0.035]">
             <input
               type="checkbox"
               checked={consentGiven}
               onChange={e => onConsentChange(e.target.checked)}
-              className="mt-0.5 w-4 h-4 accent-orange-500"
+              className="mt-1 h-4 w-4 accent-orange-500"
             />
-            <span className="text-sm text-slate-300">
-              I confirm I own this target or have explicit written permission 
-              to perform active security testing on it.
+            <span className="text-sm leading-6 text-slate-300">
+              I confirm I own this target or have explicit written permission to perform active security testing on it.
             </span>
           </label>
 
-          {/* Active URL inputs */}
           {consentGiven && (
-            <div>
-              <p className="text-xs text-slate-400 mb-2">
-                Add URLs with query parameters for sqlmap to test:
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+              <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-orange-200">
+                <CheckCircle2 size={15} />
+                Payload URLs
+              </div>
+              <p className="mb-3 text-xs leading-5 text-slate-500">
+                Add URLs with query parameters for sqlmap to test.
               </p>
-              
-              {/* URL input row */}
-              <div className="flex gap-2 mb-2">
+
+              <div className="mb-3 flex gap-2">
                 <input
                   type="url"
                   placeholder="http://target.com/search?q=test"
                   value={urlInput}
                   onChange={e => setUrlInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && addUrl()}
-                  className="flex-1 bg-slate-800 border border-slate-600 rounded-lg
-                             px-3 py-2 text-sm text-white placeholder-slate-500
-                             focus:outline-none focus:border-orange-500"
+                  className="min-w-0 flex-1 rounded-xl border border-orange-300/15 bg-slate-950/70 px-3 py-2 text-sm text-white placeholder:text-slate-600 transition-colors focus:border-orange-300/60 focus:outline-none focus:ring-4 focus:ring-orange-400/10"
                 />
                 <button
                   onClick={addUrl}
-                  className="bg-orange-500 hover:bg-orange-400 text-white
-                             px-3 py-2 rounded-lg transition-colors"
+                  className="rounded-xl bg-orange-500 px-3 py-2 text-white shadow-[0_0_24px_rgba(249,115,22,0.22)] transition-colors hover:bg-orange-400"
                 >
                   <Plus size={16} />
                 </button>
               </div>
 
-              {/* Added URLs list */}
               {activeUrls.length > 0 && (
-                <div className="space-y-1">
+                <div className="space-y-2">
                   {activeUrls.map(url => (
-                    <div key={url} 
-                         className="flex items-center justify-between bg-slate-800
-                                    rounded-lg px-3 py-2">
-                      <span className="text-xs font-mono text-slate-300 truncate">
-                        {url}
-                      </span>
+                    <div key={url} className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-slate-950/65 px-3 py-2">
+                      <span className="truncate font-mono text-xs text-slate-300">{url}</span>
                       <button
                         onClick={() => removeUrl(url)}
-                        className="text-slate-500 hover:text-red-400 ml-2 flex-shrink-0"
+                        className="flex-shrink-0 rounded-lg p-1 text-slate-500 transition-colors hover:bg-red-400/10 hover:text-red-300"
                       >
                         <X size={14} />
                       </button>
