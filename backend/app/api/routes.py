@@ -208,6 +208,9 @@ async def get_results(scan_id: str, db: Session = Depends(get_db)):
                    f"Check /api/status/{scan_id}"
         )
 
+    # Recalculate counts from the same visible findings query used below so
+    # summary cards always match the returned findings list.
+    scan = crud.update_scan_counts(db, scan_id) or scan
     findings = crud.get_findings_by_scan(db, scan_id)
 
     # Get attack chains (only exist for combined scans)

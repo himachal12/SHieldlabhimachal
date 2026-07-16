@@ -186,7 +186,7 @@ def analyze_attack_chains(findings: list[dict]) -> list[dict]:
             if chain:
                 chains.append(chain)
                 logger.warning(
-                    f"ATTACK CHAIN FOUND: {chain['finding_types']} → "
+                    f"ATTACK CHAIN FOUND: {chain['finding_types']} -> "
                     f"{chain['severity']} | {chain['time_to_exploit']}"
                 )
 
