@@ -198,6 +198,7 @@ class PRResult(BaseModel):
     fixes_skipped: int = 0
     applied_details: List[dict] = []
     skipped_details: List[dict] = []
+    validation_details: List[dict] = []
     error: Optional[str] = None
 
     class Config:

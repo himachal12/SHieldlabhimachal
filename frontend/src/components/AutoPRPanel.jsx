@@ -2,6 +2,21 @@ import { useState } from 'react'
 import { GitPullRequest, ExternalLink, CheckCircle, 
          XCircle, Loader2, Eye, EyeOff, Info } from 'lucide-react'
 
+function ValidationDetails({ details }) {
+  if (!details?.length) return null
+
+  return (
+    <div className="mt-3 text-xs text-slate-400">
+      <p className="font-medium mb-1">Validation results:</p>
+      {details.map((detail, index) => (
+        <p key={index} className="text-slate-500 break-words">
+          • <span className="font-mono">{detail.file}</span>: {detail.status} — {detail.reason}
+        </p>
+      ))}
+    </div>
+  )
+}
+
 export default function AutoPRPanel({ scanId, repoUrl, scanType }) {
   const [token, setToken] = useState('')
   const [showToken, setShowToken] = useState(false)
@@ -117,15 +132,17 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType }) {
             {result.skipped_details?.length > 0 && (
               <div className="mt-3 text-xs text-slate-400">
                 <p className="font-medium mb-1">
-                  Skipped (code changed since scan):
+                  Not applied — manual review required:
                 </p>
                 {result.skipped_details.map((s, i) => (
-                  <p key={i} className="text-slate-500">
-                    • {s.vuln_type}: {s.reason}
+                  <p key={i} className="text-slate-500 break-words">
+                    • {s.vuln_type} ({s.status || 'manual_review'}): {s.reason}
                   </p>
                 ))}
               </div>
             )}
+
+            <ValidationDetails details={result.validation_details} />
           </div>
         )}
 
@@ -140,6 +157,16 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType }) {
               </span>
             </div>
             <p className="text-xs text-red-300">{result.error}</p>
+            {result.skipped_details?.length > 0 && (
+              <div className="mt-3 text-xs text-red-200">
+                {result.skipped_details.map((s, i) => (
+                  <p key={i} className="break-words">
+                    • {s.vuln_type} ({s.status || 'manual_review'}): {s.reason}
+                  </p>
+                ))}
+              </div>
+            )}
+            <ValidationDetails details={result.validation_details} />
           </div>
         )}
 
