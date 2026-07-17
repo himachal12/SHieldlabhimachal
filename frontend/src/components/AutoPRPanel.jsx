@@ -156,6 +156,17 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
               </div>
             </div>
 
+            {result.applied_details?.length > 0 && (
+              <div className="mt-3 text-xs text-slate-300">
+                <p className="mb-1 font-medium text-green-300">Applied in this PR:</p>
+                {result.applied_details.map((fix, i) => (
+                  <p key={i} className="break-words text-slate-400">
+                    • {fix.vuln_type} — <span className="font-mono">{fix.file}:{fix.line || 'N/A'}</span> ({fix.status})
+                  </p>
+                ))}
+              </div>
+            )}
+
             {/* Skipped details */}
             {result.skipped_details?.length > 0 && (
               <div className="mt-3 text-xs text-slate-400">
@@ -172,7 +183,7 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
 
               <ValidationDetails details={result.validation_details} />
               <p className="mt-3 text-xs text-slate-500">
-                “Validated” means the recorded checks passed. ShieldLabs does not push one-click security patches when repository tests are unavailable or failing.
+                “Validated” means the recorded checks passed. A PR without native tests is only created when you explicitly select manual review.
               </p>
           </div>
         )}
