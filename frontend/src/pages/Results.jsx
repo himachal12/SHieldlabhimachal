@@ -4,7 +4,7 @@ import FindingCard from '../components/FindingCard'
 import SeverityBadge from '../components/SeverityBadge'
 import SeverityChart from '../components/SeverityChart'
 import { getScanResults } from '../api/client'
-import { useEffect, useMemo, useState } from 'react'
+import { Component, useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   AlertTriangle,
@@ -71,6 +71,35 @@ const formatDate = (value) => {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return 'Not available'
   return date.toLocaleString()
+}
+
+class AutoPRPanelErrorBoundary extends Component {
+  state = { hasError: false }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  componentDidUpdate(previousProps) {
+    if (previousProps.scanId !== this.props.scanId && this.state.hasError) {
+      this.setState({ hasError: false })
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <section className="mb-6 rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm text-yellow-100">
+          <p className="font-semibold">Auto-Fix Pull Request is temporarily unavailable.</p>
+          <p className="mt-1 text-xs text-yellow-200/80">
+            Your scan results are still available. Refresh after updating the frontend before using Auto PR.
+          </p>
+        </section>
+      )
+    }
+
+    return this.props.children
+  }
 }
 
 export default function Results() {
