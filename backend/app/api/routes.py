@@ -286,6 +286,14 @@ async def create_fix_pr(
 
     # Get findings from database
     raw_findings = crud.get_findings_by_scan(db, request.scan_id)
+    if request.finding_ids is not None:
+        selected_ids = set(request.finding_ids)
+        raw_findings = [f for f in raw_findings if f.finding_id in selected_ids]
+        if not raw_findings:
+            raise HTTPException(
+                status_code=400,
+                detail="None of the selected findings belong to this completed scan."
+            )
 
     # Convert SQLAlchemy objects to dicts for the auto_pr module
     findings_dicts = []

@@ -25,7 +25,11 @@ Key design decisions:
    It's the developer's token for their repo.
 """
 
+import ast
 import os
+import re
+import subprocess
+import sys
 import uuid
 import shutil
 import tempfile
@@ -87,6 +91,125 @@ def _is_structural_rewrite(vulnerable_code: str, fixed_code: str) -> bool:
         return True
 
     return False
+
+
+def _import_roots(source: str) -> set[str]:
+    """Return the top-level modules imported by valid Python source."""
+    roots = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            roots.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            roots.add(node.module.split(".")[0])
+    return roots
+
+
+def _validate_python_patch(file_path: str, original: str, candidate: str) -> tuple[bool, dict]:
+    """
+    Validate a candidate Python file before it is pushed.
+
+    New third-party imports are deliberately rejected. They need a dependency
+    manifest update and project-specific validation, which is not safe for a
+    one-click patch.
+    """
+    checks = {}
+    try:
+        ast.parse(candidate, filename=file_path)
+        checks["ast_parse"] = "passed"
+    except SyntaxError as exc:
+        checks["ast_parse"] = "failed"
+        return False, {
+            "status": "rejected_syntax_error",
+            "checks": checks,
+            "reason": f"Syntax validation failed: {exc.msg} (line {exc.lineno}).",
+        }
+
+    original_imports = _import_roots(original)
+    candidate_imports = _import_roots(candidate)
+    new_imports = candidate_imports - original_imports
+    stdlib_modules = getattr(sys, "stdlib_module_names", set())
+    third_party_imports = sorted(
+        module for module in new_imports
+        if module not in stdlib_modules and module != "__future__"
+    )
+    if third_party_imports:
+        checks["dependency_policy"] = "failed"
+        return False, {
+            "status": "rejected_dependency",
+            "checks": checks,
+            "reason": (
+                "Generated fix introduces unapproved third-party import(s): "
+                f"{', '.join(third_party_imports)}. Manual review required."
+            ),
+        }
+    checks["dependency_policy"] = "passed"
+
+    try:
+        with open(file_path, "w", encoding="utf-8") as handle:
+            handle.write(candidate)
+        result = subprocess.run(
+            [sys.executable, "-m", "py_compile", file_path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        checks["py_compile"] = "failed"
+        return False, {
+            "status": "rejected_validation_error",
+            "checks": checks,
+            "reason": f"Could not compile generated patch: {exc}",
+        }
+
+    if result.returncode != 0:
+        checks["py_compile"] = "failed"
+        output = (result.stderr or result.stdout).strip().replace("\n", " ")
+        return False, {
+            "status": "rejected_syntax_error",
+            "checks": checks,
+            "reason": f"Python compilation failed: {output[:500]}",
+        }
+
+    checks["py_compile"] = "passed"
+    return True, {
+        "status": "validated",
+        "checks": checks,
+        "reason": "AST parsing and Python compilation passed.",
+    }
+
+
+def _replace_with_context(content: str, vulnerable_code: str, fixed_code: str) -> tuple[str | None, str | None]:
+    """Replace one complete source fragment while preserving its real indentation."""
+    raw = vulnerable_code or ""
+    needle = raw.strip()
+    if not needle:
+        return None, "Empty vulnerable code snippet."
+
+    match_start = content.find(raw) if raw and raw in content else content.find(needle)
+    if match_start < 0:
+        return None, "Vulnerable code pattern not found in current file. File may have changed since scan was run."
+
+    matched_text = raw if raw and content.startswith(raw, match_start) else needle
+    match_end = match_start + len(matched_text)
+    line_start = content.rfind("\n", 0, match_start) + 1
+    line_end = content.find("\n", match_end)
+    if line_end < 0:
+        line_end = len(content)
+    prefix = content[line_start:match_start]
+    suffix = content[match_end:line_end]
+    indent = re.match(r"[ \t]*", content[line_start:]).group(0)
+    replacement_lines = fixed_code.strip().splitlines()
+
+    if len(replacement_lines) > 1 and (prefix.strip() or suffix.strip()):
+        return None, (
+            "Generated multi-line fix targets only part of a source statement. "
+            "Manual review required."
+        )
+
+    replacement = _apply_indent("\n".join(replacement_lines), indent)
+    return content[:match_start] + replacement + content[match_end:], None
+
+
 def get_eligible_findings(findings: list[dict]) -> list[dict]:
     """
     Filter findings that qualify for auto-fix.
@@ -278,6 +401,7 @@ def create_fix_pr(
     # ── Apply fixes file by file ───────────────────────────────
     applied_fixes = []
     skipped_fixes = []
+    validation_details = []
 
     try:
         for relative_path, file_findings in fixes_by_file.items():
@@ -288,6 +412,7 @@ def create_fix_pr(
                     skipped_fixes.append({
                         "vuln_type": f.get("vuln_type"),
                         "file": relative_path,
+                        "status": "skipped_file_not_found",
                         "reason": f"File not found in repo: {relative_path}"
                     })
                 continue
@@ -297,83 +422,121 @@ def create_fix_pr(
                 content = fh.read()
 
             original_content = content  # keep for comparison
+            file_applied_fixes = []
 
-            # Apply each fix for this file
+            # Apply and validate each fix independently. One rejected fix must
+            # never discard another fix that already passed validation.
             for finding in file_findings:
-                vulnerable_code = finding.get("vulnerable_code", "").strip()
+                vulnerable_code = finding.get("vulnerable_code", "")
                 fixed_code = finding.get("fixed_code", "").strip()
 
-                if not vulnerable_code or not fixed_code:
+                if not vulnerable_code.strip() or not fixed_code:
                     skipped_fixes.append({
                         "vuln_type": finding.get("vuln_type"),
                         "file": relative_path,
+                        "status": "skipped_missing_patch",
                         "reason": "Empty vulnerable_code or fixed_code"
                     })
                     continue
 
-                # ── Detect indentation of vulnerable code in context ──────
-                base_indent = _get_base_indent(vulnerable_code)
-
-                # ── Check if fix is a structural rewrite (not drop-in) ────
                 if _is_structural_rewrite(vulnerable_code, fixed_code):
                     skipped_fixes.append({
                         "vuln_type": finding.get("vuln_type"),
                         "file": relative_path,
-                        "reason": (
-                            "AI-generated fix is a structural rewrite "
-                            "(e.g. adds a new function) rather than a drop-in "
-                            "replacement. Manual fix recommended."
-                        )
+                        "status": "rejected_unsafe_patch_boundary",
+                        "reason": "AI-generated fix is a structural rewrite. Manual fix recommended.",
                     })
-                    logger.warning(
-                        f"  Skipped (structural rewrite): "
-                        f"{finding.get('vuln_type')} in {relative_path}"
-                    )
                     continue
 
-                # ── Re-indent the fix to match surrounding code ───────────
-                indented_fix = _apply_indent(fixed_code, base_indent)
-
-                # ── Try exact match first ──────────────────────────────────
-                matched = False
-                if vulnerable_code in content:
-                    content = content.replace(vulnerable_code, indented_fix, 1)
-                    matched = True
-
-                # ── Try stripped match (handles minor whitespace differences) ──
-                elif vulnerable_code.strip() in content:
-                    content = content.replace(
-                        vulnerable_code.strip(), indented_fix.strip(), 1
-                    )
-                    matched = True
-
-                if matched:
-                    applied_fixes.append({
-                        "vuln_type": finding.get("vuln_type"),
-                        "severity": finding.get("severity"),
-                        "cvss_score": finding.get("cvss_score"),
-                        "file": relative_path,
-                        "line": finding.get("line_number")
-                    })
-                    logger.info(
-                        f"  Applied fix: {finding.get('vuln_type')} "
-                        f"in {relative_path}"
-                    )
+                candidate, replacement_error = _replace_with_context(
+                    content, vulnerable_code, fixed_code
+                )
+                if candidate is None:
+                    validation = {
+                        "status": "rejected_unsafe_patch_boundary",
+                        "checks": {},
+                        "reason": replacement_error,
+                    }
+                    is_valid = False
                 else:
+                    is_valid, validation = _validate_python_patch(
+                        local_path, content, candidate
+                    )
+
+                validation_details.append({"file": relative_path, **validation})
+                if not is_valid:
                     skipped_fixes.append({
                         "vuln_type": finding.get("vuln_type"),
                         "file": relative_path,
-                        "reason": (
-                            "Vulnerable code pattern not found in current file. "
-                            "File may have changed since scan was run."
-                        )
+                        "line": finding.get("line_number"),
+                        "status": validation["status"],
+                        "checks": validation["checks"],
+                        "reason": validation["reason"],
                     })
                     logger.warning(
-                        f"  Skipped: {finding.get('vuln_type')} — "
-                        f"exact match not found in {relative_path}"
+                        "Rejected generated fix %s in %s: %s",
+                        finding.get("vuln_type"), relative_path, validation["reason"],
                     )
+                    continue
 
-            # If content changed, push the file to GitHub
+                content = candidate
+                file_applied_fixes.append({
+                    "vuln_type": finding.get("vuln_type"),
+                    "severity": finding.get("severity"),
+                    "cvss_score": finding.get("cvss_score"),
+                    "file": relative_path,
+                    "line": finding.get("line_number"),
+                    "status": "pending_push",
+                })
+                logger.info(
+                    "Validated staged fix: %s in %s",
+                    finding.get("vuln_type"), relative_path,
+                )
+
+            # Validate the complete candidate file before it can be pushed.
+            if content != original_content and relative_path.endswith(".py"):
+                is_valid, validation = _validate_python_patch(
+                    local_path, original_content, content
+                )
+                validation_details.append({"file": relative_path, **validation})
+                if not is_valid:
+                    # The validator writes the candidate before py_compile. Restore the
+                    # original source and reject every patch in this file as a unit.
+                    with open(local_path, "w", encoding="utf-8") as handle:
+                        handle.write(original_content)
+                    for fix in file_applied_fixes:
+                        skipped_fixes.append({
+                            "vuln_type": fix["vuln_type"],
+                            "file": relative_path,
+                            "line": fix.get("line"),
+                            "status": validation["status"],
+                            "reason": validation["reason"],
+                            "checks": validation["checks"],
+                        })
+                    logger.warning(
+                        "Rejected generated fixes in %s: %s",
+                        relative_path,
+                        validation["reason"],
+                    )
+                    continue
+
+            if content != original_content and not relative_path.endswith(".py"):
+                validation = {
+                    "status": "rejected_unsupported_file_type",
+                    "checks": {},
+                    "reason": "Only Python files can be syntax-validated for Auto PR.",
+                }
+                validation_details.append({"file": relative_path, **validation})
+                for fix in file_applied_fixes:
+                    skipped_fixes.append({
+                        "vuln_type": fix["vuln_type"],
+                        "file": relative_path,
+                        "line": fix.get("line"),
+                        **validation,
+                    })
+                continue
+
+            # Push only a fully validated candidate file.
             if content != original_content:
                 try:
                     # Get the file's SHA (needed for GitHub API update)
@@ -385,6 +548,9 @@ def create_fix_pr(
                         sha=gh_file.sha,
                         branch=branch_name
                     )
+                    for fix in file_applied_fixes:
+                        fix["status"] = "validated_and_applied"
+                    applied_fixes.extend(file_applied_fixes)
                     logger.info(f"  Pushed fixed {relative_path} to {branch_name}")
                 except GithubException as e:
                     logger.error(f"  Failed to push {relative_path}: {e}")
@@ -394,12 +560,9 @@ def create_fix_pr(
                         skipped_fixes.append({
                             "vuln_type": ft,
                             "file": relative_path,
+                            "status": "rejected_push_error",
                             "reason": f"GitHub push failed: {str(e)}"
                         })
-                        applied_fixes = [
-                            af for af in applied_fixes
-                            if not (af["file"] == relative_path and af["vuln_type"] == ft)
-                        ]
 
     finally:
         # Always clean up temp directory
@@ -408,15 +571,21 @@ def create_fix_pr(
 
     # If nothing got applied, don't open an empty PR
     if not applied_fixes:
+        rejection_message = "No fixes could be applied. Review the validation details below."
+        if validation_details:
+            rejection_message = (
+                "No fixes were pushed because generated changes failed validation. "
+                "Review the validation details below."
+            )
         return _error_result(
-            "No fixes could be applied — all matches failed. "
-            "This usually means the code changed since the scan ran. "
-            "Try re-scanning the repository.",
+            rejection_message,
             extra={
                 "branch_name": branch_name,
                 "fixes_applied": 0,
                 "fixes_skipped": len(skipped_fixes),
-                "skipped_details": skipped_fixes
+                "applied_details": [],
+                "skipped_details": skipped_fixes,
+                "validation_details": validation_details,
             }
         )
 
@@ -424,7 +593,8 @@ def create_fix_pr(
     pr_body = _build_pr_description(
         scan_id=scan_id,
         applied=applied_fixes,
-        skipped=skipped_fixes
+        skipped=skipped_fixes,
+        validations=validation_details,
     )
 
     try:
@@ -446,6 +616,7 @@ def create_fix_pr(
             "fixes_skipped": len(skipped_fixes),
             "applied_details": applied_fixes,
             "skipped_details": skipped_fixes,
+            "validation_details": validation_details,
             "error": None
         }
 
@@ -455,7 +626,10 @@ def create_fix_pr(
             extra={
                 "branch_name": branch_name,
                 "fixes_applied": len(applied_fixes),
-                "fixes_skipped": len(skipped_fixes)
+                "fixes_skipped": len(skipped_fixes),
+                "applied_details": applied_fixes,
+                "skipped_details": skipped_fixes,
+                "validation_details": validation_details,
             }
         )
 
@@ -501,7 +675,8 @@ def _normalize_path(file_path: str, temp_dir: str) -> str | None:
 def _build_pr_description(
     scan_id: str,
     applied: list[dict],
-    skipped: list[dict]
+    skipped: list[dict],
+    validations: list[dict] | None = None,
 ) -> str:
     """Build a human-readable PR description."""
 
@@ -522,8 +697,8 @@ def _build_pr_description(
         lines += [
             "### ✅ Applied Fixes",
             "",
-            "| Vulnerability | File | Line | Severity | CVSS |",
-            "|---|---|---|---|---|",
+            "| Vulnerability | File | Line | Severity | CVSS | Validation |",
+            "|---|---|---|---|---|---|",
         ]
         for fix in applied:
             lines.append(
@@ -531,7 +706,8 @@ def _build_pr_description(
                 f"| `{fix['file']}` "
                 f"| {fix.get('line', 'N/A')} "
                 f"| {fix.get('severity', 'N/A')} "
-                f"| {fix.get('cvss_score', 'N/A')} |"
+                f"| {fix.get('cvss_score', 'N/A')} "
+                f"| AST + py_compile passed |"
             )
         lines.append("")
 
@@ -542,8 +718,25 @@ def _build_pr_description(
         ]
         for skip in skipped:
             lines.append(
-                f"- **{skip['vuln_type']}** in `{skip['file']}`: "
+                f"- **{skip['vuln_type']}** in `{skip['file']}` "
+                f"({skip.get('status', 'manual_review')}): "
                 f"{skip['reason']}"
+            )
+        lines.append("")
+
+    if validations:
+        lines += [
+            "### Validation Summary",
+            "",
+        ]
+        for validation in validations:
+            checks = ", ".join(
+                f"{name}={status}"
+                for name, status in validation.get("checks", {}).items()
+            ) or "no checks run"
+            lines.append(
+                f"- `{validation['file']}` — **{validation['status']}**: "
+                f"{validation['reason']} ({checks})"
             )
         lines.append("")
 
@@ -567,6 +760,7 @@ def _error_result(message: str, extra: dict = None) -> dict:
         "fixes_skipped": 0,
         "applied_details": [],
         "skipped_details": [],
+        "validation_details": [],
         "error": message
     }
     if extra:
