@@ -17,7 +17,7 @@ function ValidationDetails({ details }) {
   )
 }
 
-export default function AutoPRPanel({ scanId, repoUrl, scanType }) {
+export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }) {
   const [token, setToken] = useState('')
   const [showToken, setShowToken] = useState(false)
   const [loading, setLoading] = useState(false)
