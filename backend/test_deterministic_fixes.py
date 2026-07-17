@@ -26,7 +26,10 @@ def test_hardcoded_secret_uses_deterministic_environment_lookup(monkeypatch, tmp
         "vulnerable_code": 'API_KEY = "secret-value"',
         "file_path": str(source),
     }
-    monkeypatch.setattr("app.agents.fix_generation.ollama_call", lambda prompt: (_ for _ in ()).throw(AssertionError("LLM should not be called")))
+    monkeypatch.setattr(
+        "app.agents.fix_generation.ollama_call",
+        lambda prompt, **kwargs: (_ for _ in ()).throw(AssertionError("LLM should not be called")),
+    )
 
     result = generate_fix(finding)
 

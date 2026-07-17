@@ -20,8 +20,12 @@ Respond with ONLY valid JSON, no markdown fences, no extra commentary:
   "fixed_code": "the corrected code as a direct replacement for the vulnerable snippet",
   "why_vulnerable": "one sentence explaining the specific risk",
   "why_fix_works": "one sentence explaining why the fix resolves it",
-  "remediation_time": "estimate like '15 minutes' or '1 hour'"
+  "remediation_time": "estimate like '15 minutes' or '1 hour'",
+  "manual_review_required": false
 }}
+
+If no safe direct replacement is possible, return this same schema with an
+empty "fixed_code" and explain why manual review is required. Do not guess.
 """
 
 TEMPLATES = {

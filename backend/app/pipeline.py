@@ -51,19 +51,28 @@ def run_code_scan_pipeline(
     Full pipeline for code scanning.
     Runs in a background task -- updates DB throughout.
     """
+    temp_path = None
     try:
         # ── Stage 1: Parse codebase ─────────────────────────────
         _update_progress(db, scan_id, 5, "Cloning and parsing repository...")
 
         from app.agents.code_parser import CodeParser
-        parser = CodeParser()
+        from app.utils.repo_handler import download_github_repo, extract_zip, cleanup_temp_repo
 
+        # Keep this checkout alive until remediation generation is complete.
+        # Deterministic fixes inspect the original source (for example, to
+        # confirm ``import os`` before replacing a hardcoded secret), and LLM
+        # prompts use the same source for context. Cleaning it up earlier
+        # forces an unnecessary, less-safe LLM fallback.
         if repo_url:
-            code_map = parser.parse_from_github(repo_url)
+            temp_path = download_github_repo(repo_url)
         elif zip_path:
-            code_map = parser.parse_from_zip(zip_path)
+            temp_path = extract_zip(zip_path)
         else:
             raise ValueError("No input provided: need repo_url or zip_path")
+
+        parser = CodeParser()
+        code_map = parser.parse_local_path(temp_path)
 
         logger.info(
             f"[{scan_id}] Parsed {code_map['total_files_parsed']} files, "
@@ -75,24 +84,7 @@ def run_code_scan_pipeline(
 
         from app.scanners.code_scanner import scan_codebase
 
-        # We need the local path -- code_parser already cleaned up the clone,
-        # so we re-parse from a local temp path approach.
-        # Simpler fix: scan_codebase accepts a path, so we run the full
-        # parse+scan together via a temp clone we manage here.
-        import tempfile, shutil
-        from app.utils.repo_handler import download_github_repo, extract_zip, cleanup_temp_repo
-
-        temp_path = None
-        try:
-            if repo_url:
-                temp_path = download_github_repo(repo_url)
-            elif zip_path:
-                temp_path = extract_zip(zip_path)
-
-            raw_findings = scan_codebase(temp_path)
-        finally:
-            if temp_path:
-                cleanup_temp_repo(temp_path)
+        raw_findings = scan_codebase(temp_path)
 
         logger.info(f"[{scan_id}] Raw findings: {len(raw_findings)}")
 
@@ -139,6 +131,9 @@ def run_code_scan_pipeline(
             db, scan_id, status="failed",
             current_stage=f"Error: {str(e)[:200]}"
         )
+    finally:
+        if temp_path:
+            cleanup_temp_repo(temp_path)
 
 
 def run_web_scan_pipeline(
@@ -206,24 +201,21 @@ def run_combined_pipeline(
     Combined code + web scan with cross-domain analysis.
     This is the FULL ShieldLabs experience -- both pillars + attack chains.
     """
+    temp_path = None
     try:
         all_findings = []
 
         # ── Code scanning ─────────────────────────────────────────
         _update_progress(db, scan_id, 5, "Cloning and parsing repository...")
 
-        import tempfile
         from app.utils.repo_handler import download_github_repo, cleanup_temp_repo
         from app.scanners.code_scanner import scan_codebase
         from app.scanners.semantic_analyzer import review_all_low_confidence
         from app.agents.fix_generation import generate_all_fixes
 
         temp_path = download_github_repo(repo_url)
-        try:
-            _update_progress(db, scan_id, 15, "Detecting code vulnerabilities...")
-            raw_code_findings = scan_codebase(temp_path)
-        finally:
-            cleanup_temp_repo(temp_path)
+        _update_progress(db, scan_id, 15, "Detecting code vulnerabilities...")
+        raw_code_findings = scan_codebase(temp_path)
 
         _update_progress(db, scan_id, 25, "Filtering false positives...")
         code_findings = review_all_low_confidence(raw_code_findings)
@@ -292,6 +284,9 @@ def run_combined_pipeline(
             db, scan_id, status="failed",
             current_stage=f"Error: {str(e)[:200]}"
         )
+    finally:
+        if temp_path:
+            cleanup_temp_repo(temp_path)
 
 
 def _persist_findings(db: Session, scan_id: str, findings: list[dict]):

@@ -28,7 +28,12 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 # OLLAMA (LOCAL)
 # ==================
 
-def ollama_call(prompt: str, model: str = None, timeout: int = 120) -> str:
+def ollama_call(
+    prompt: str,
+    model: str = None,
+    timeout: int = 120,
+    system_prompt: str | None = None,
+) -> str:
     """
     Call local Ollama instance (runs on your 4050 GPU)
     Use this for: code parsing, semantic analysis, fix generation
@@ -46,13 +51,17 @@ def ollama_call(prompt: str, model: str = None, timeout: int = 120) -> str:
     start = time.time()
 
     try:
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,  # Get full response at once, not token-by-token
+        }
+        if system_prompt:
+            payload["system"] = system_prompt
+
         response = requests.post(
             f"{OLLAMA_BASE_URL}/api/generate",
-            json={
-                "model": model,
-                "prompt": prompt,
-                "stream": False  # Get full response at once, not token-by-token
-            },
+            json=payload,
             timeout=timeout
         )
         response.raise_for_status()
@@ -78,7 +87,12 @@ def ollama_call(prompt: str, model: str = None, timeout: int = 120) -> str:
 # GROQ (CLOUD)
 # ==================
 
-def groq_call(prompt: str, model: str = None, max_tokens: int = 1024) -> str:
+def groq_call(
+    prompt: str,
+    model: str = None,
+    max_tokens: int = 1024,
+    system_prompt: str | None = None,
+) -> str:
     """
     Call Groq API (cloud, fast, but rate-limited to 150 req/day on free tier)
     Use this for: severity reasoning, attack chain analysis
@@ -100,9 +114,13 @@ def groq_call(prompt: str, model: str = None, max_tokens: int = 1024) -> str:
     start = time.time()
 
     try:
+        messages = [{"role": "user", "content": prompt}]
+        if system_prompt:
+            messages.insert(0, {"role": "system", "content": system_prompt})
+
         response = groq_client.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             max_tokens=max_tokens,
             temperature=0.2  # Low temperature = more deterministic, less creative
         )
