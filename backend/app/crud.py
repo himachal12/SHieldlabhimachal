@@ -109,9 +109,16 @@ def add_finding(db: Session, scan_id: str, vuln_type: str, severity: str,
         **kwargs
     )
 
-    db.add(finding)
-    db.commit()
-    db.refresh(finding)
+    try:
+        db.add(finding)
+        db.commit()
+        db.refresh(finding)
+    except Exception:
+        # A failed INSERT leaves SQLAlchemy in a pending-rollback state. Reset
+        # it here so a single malformed finding cannot cascade into hundreds
+        # of secondary database errors in the rest of the scan pipeline.
+        db.rollback()
+        raise
     logger.info(f"Added finding {finding_id} ({vuln_type}, {severity}) to {scan_id}")
     return finding
 

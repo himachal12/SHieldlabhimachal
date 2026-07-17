@@ -291,6 +291,10 @@ def run_combined_pipeline(
 
 def _persist_findings(db: Session, scan_id: str, findings: list[dict]):
     """Save all findings to database."""
+    # Defensive schema check for workers started without the FastAPI lifespan
+    # (for example, a direct background worker process or a deployment upgrade).
+    from app.database import init_db
+    init_db()
     for f in findings:
         try:
             crud.add_finding(
@@ -321,6 +325,7 @@ def _persist_findings(db: Session, scan_id: str, findings: list[dict]):
                 is_cross_domain=f.get("is_cross_domain", False),
             )
         except Exception as e:
+            db.rollback()
             logger.warning(f"Failed to persist finding {f.get('vuln_type')}: {e}")
 
 
