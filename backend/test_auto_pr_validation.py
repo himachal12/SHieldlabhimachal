@@ -19,7 +19,7 @@ if "github" not in sys.modules:
     sys.modules["github"] = github_stub
 
 from app.agents import auto_pr
-from app.agents.auto_pr import _build_pr_description, _replace_with_context, _validate_python_patch
+from app.agents.auto_pr import _build_pr_description, _validate_python_patch
 
 
 def test_valid_python_patch_is_compiled(tmp_path):
@@ -67,30 +67,6 @@ def test_new_third_party_import_requires_manual_review(tmp_path):
     assert detail["status"] == "rejected_dependency"
     assert "bcrypt" in detail["reason"]
     assert source_file.read_text(encoding="utf-8") == original
-
-
-def test_multiline_patch_uses_source_indentation():
-    source = "def target():\n    query = 'bad'\n    return query\n"
-    candidate, error = _replace_with_context(
-        source,
-        "    query = 'bad'",
-        "query = '?'\ncursor.execute(query)",
-    )
-
-    assert error is None
-    assert "    query = '?'\n    cursor.execute(query)" in candidate
-
-
-def test_partial_statement_rejects_multiline_patch():
-    source = "def target():\n    return redirect(request.args.get('url'))\n"
-    candidate, error = _replace_with_context(
-        source,
-        "redirect(request.args.get('url')",
-        "url = '/'\nreturn redirect(url)",
-    )
-
-    assert candidate is None
-    assert "part of a source statement" in error
 
 
 def test_pr_description_reports_validation_and_skips():

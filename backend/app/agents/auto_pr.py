@@ -27,7 +27,6 @@ Key design decisions:
 
 import ast
 import os
-import re
 import subprocess
 import sys
 import uuid
@@ -176,38 +175,6 @@ def _validate_python_patch(file_path: str, original: str, candidate: str) -> tup
         "checks": checks,
         "reason": "AST parsing and Python compilation passed.",
     }
-
-
-def _replace_with_context(content: str, vulnerable_code: str, fixed_code: str) -> tuple[str | None, str | None]:
-    """Replace one complete source fragment while preserving its real indentation."""
-    raw = vulnerable_code or ""
-    needle = raw.strip()
-    if not needle:
-        return None, "Empty vulnerable code snippet."
-
-    match_start = content.find(raw) if raw and raw in content else content.find(needle)
-    if match_start < 0:
-        return None, "Vulnerable code pattern not found in current file. File may have changed since scan was run."
-
-    matched_text = raw if raw and content.startswith(raw, match_start) else needle
-    match_end = match_start + len(matched_text)
-    line_start = content.rfind("\n", 0, match_start) + 1
-    line_end = content.find("\n", match_end)
-    if line_end < 0:
-        line_end = len(content)
-    prefix = content[line_start:match_start]
-    suffix = content[match_end:line_end]
-    indent = re.match(r"[ \t]*", content[line_start:]).group(0)
-    replacement_lines = fixed_code.strip().splitlines()
-
-    if len(replacement_lines) > 1 and (prefix.strip() or suffix.strip()):
-        return None, (
-            "Generated multi-line fix targets only part of a source statement. "
-            "Manual review required."
-        )
-
-    replacement = _apply_indent("\n".join(replacement_lines), indent)
-    return content[:match_start] + replacement + content[match_end:], None
 
 
 def get_eligible_findings(findings: list[dict]) -> list[dict]:
@@ -444,7 +411,11 @@ def create_fix_pr(
                         "vuln_type": finding.get("vuln_type"),
                         "file": relative_path,
                         "status": "rejected_unsafe_patch_boundary",
-                        "reason": "AI-generated fix is a structural rewrite. Manual fix recommended.",
+                        "reason": (
+                            "AI-generated fix is a structural rewrite "
+                            "(e.g. adds a new function) rather than a drop-in "
+                            "replacement. Manual fix recommended."
+                        )
                     })
                     continue
 
@@ -463,15 +434,12 @@ def create_fix_pr(
                         local_path, content, candidate
                     )
 
-                validation_details.append({"file": relative_path, **validation})
-                if not is_valid:
-                    skipped_fixes.append({
+                if matched:
+                    file_applied_fixes.append({
                         "vuln_type": finding.get("vuln_type"),
                         "file": relative_path,
                         "line": finding.get("line_number"),
-                        "status": validation["status"],
-                        "checks": validation["checks"],
-                        "reason": validation["reason"],
+                        "status": "pending_validation",
                     })
                     logger.warning(
                         "Rejected generated fix %s in %s: %s",
@@ -492,6 +460,52 @@ def create_fix_pr(
                     "Validated staged fix: %s in %s",
                     finding.get("vuln_type"), relative_path,
                 )
+
+            # Validate the complete candidate file before it can be pushed.
+            if content != original_content and relative_path.endswith(".py"):
+                is_valid, validation = _validate_python_patch(
+                    local_path, original_content, content
+                )
+                validation_details.append({"file": relative_path, **validation})
+                if not is_valid:
+                    # The validator writes the candidate before py_compile. Restore the
+                    # original source and reject every patch in this file as a unit.
+                    with open(local_path, "w", encoding="utf-8") as handle:
+                        handle.write(original_content)
+                    for fix in file_applied_fixes:
+                        skipped_fixes.append({
+                            "vuln_type": fix["vuln_type"],
+                            "file": relative_path,
+                            "line": fix.get("line"),
+                            "status": validation["status"],
+                            "reason": validation["reason"],
+                            "checks": validation["checks"],
+                        })
+                    logger.warning(
+                        "Rejected generated fixes in %s: %s",
+                        relative_path,
+                        validation["reason"],
+                    )
+                    continue
+
+            if content != original_content and not relative_path.endswith(".py"):
+                validation = {
+                    "status": "rejected_unsupported_file_type",
+                    "checks": {},
+                    "reason": "Only Python files can be syntax-validated for Auto PR.",
+                }
+                validation_details.append({"file": relative_path, **validation})
+                for fix in file_applied_fixes:
+                    skipped_fixes.append({
+                        "vuln_type": fix["vuln_type"],
+                        "file": relative_path,
+                        "status": "skipped_source_changed",
+                        "reason": (
+                            "Vulnerable code pattern not found in current file. "
+                            "File may have changed since scan was run."
+                        )
+                    })
+                continue
 
             # Validate the complete candidate file before it can be pushed.
             if content != original_content and relative_path.endswith(".py"):
