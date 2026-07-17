@@ -332,7 +332,8 @@ async def create_fix_pr(
             github_token=request.github_token,
             repo_url=str(request.repo_url),
             scan_id=request.scan_id,
-            findings=findings_dicts
+            findings=findings_dicts,
+            allow_untested=request.allow_untested,
         )
     except Exception as exc:
         logger.exception("Auto-PR engine failed before a PR could be created")
