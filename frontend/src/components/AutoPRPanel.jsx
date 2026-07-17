@@ -63,17 +63,23 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
         })
       })
 
-      const data = await res.json()
+      const responseText = await res.text()
+      let data = {}
+      try {
+        data = responseText ? JSON.parse(responseText) : {}
+      } catch {
+        data = { error: responseText }
+      }
 
       if (!res.ok) {
-        setError(data.detail || 'Failed to create PR')
+        setError(data.detail || data.error || `Auto-PR request failed (HTTP ${res.status})`)
         return
       }
 
       setResult(data)
 
-    } catch {
-      setError('Network error — is the backend running?')
+    } catch (requestError) {
+      setError(`Network error while requesting Auto PR: ${requestError.message}`)
     } finally {
       setLoading(false)
     }
