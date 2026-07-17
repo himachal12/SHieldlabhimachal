@@ -33,9 +33,12 @@ import sys
 import uuid
 import shutil
 import tempfile
+import json
 from pathlib import Path
 from github import Github, GithubException
 from app.utils.logger import get_logger
+from app.patches import source_sha256
+from app.scanners.pattern_detector import detect_hardcoded_secrets, detect_unvalidated_redirects
 
 logger = get_logger("auto_pr")
 
@@ -195,6 +198,44 @@ def _validate_vulnerability_fix(
         checks["weak_hash_removed"] = "passed"
 
     return True, {"status": "security_checks_passed", "checks": checks, "reason": "Category-specific security checks passed."}
+
+
+def _validate_full_file_regression(finding: dict, candidate: str) -> tuple[bool, dict]:
+    """Verify the entire patched module no longer reproduces the finding.
+
+    This is deliberately separate from the local patch checks: a valid snippet
+    is not sufficient when a duplicate secret or unsafe statement remains.
+    """
+    vuln_type = finding.get("vuln_type", "")
+    original = (finding.get("vulnerable_code") or "").strip()
+    checks = {"original_pattern_removed": "passed"}
+    if original and original in candidate:
+        checks["original_pattern_removed"] = "failed"
+        return False, {"status": "rejected_security_regression", "checks": checks,
+                       "reason": "The original vulnerable source remains in the patched file."}
+    path = finding.get("repository_relative_path") or finding.get("file_path") or "candidate.py"
+    if vuln_type == "Hardcoded Secrets":
+        findings = detect_hardcoded_secrets(path, candidate)
+        target = re.match(r"\s*([A-Z][A-Z0-9_]*)\s*=", original)
+        name = target.group(1) if target else None
+        assignments = re.findall(r"(?m)^\s*" + re.escape(name or "") + r"\s*=", candidate) if name else []
+        if name and len(assignments) != 1:
+            checks["single_secret_assignment"] = "failed"
+            return False, {"status": "rejected_security_regression", "checks": checks,
+                           "reason": f"Expected exactly one assignment for {name}; found {len(assignments)}."}
+        if findings:
+            checks["detector_rescan"] = "failed"
+            return False, {"status": "rejected_security_regression", "checks": checks,
+                           "reason": "Hardcoded-secret detector still reports a secret in the patched file."}
+        checks.update({"single_secret_assignment": "passed", "detector_rescan": "passed"})
+    elif vuln_type == "Unvalidated Redirects":
+        if detect_unvalidated_redirects(path, candidate):
+            checks["detector_rescan"] = "failed"
+            return False, {"status": "rejected_security_regression", "checks": checks,
+                           "reason": "Redirect detector still reports an unsafe direct redirect."}
+        checks["detector_rescan"] = "passed"
+    return True, {"status": "security_regression_tested", "checks": checks,
+                  "reason": "Full-file regression checks passed."}
 
 
 def _security_scope(candidate: str, fixed_code: str) -> str:
@@ -500,7 +541,7 @@ def get_eligible_findings(findings: list[dict]) -> list[dict]:
 
         if f.get("source") in WEB_SOURCES:
             reason = "web finding — no code to patch"
-        elif not f.get("file_path"):
+        elif not (f.get("repository_relative_path") or f.get("file_path")):
             reason = "no file_path"
         elif not f.get("vulnerable_code"):
             reason = "no vulnerable_code snippet stored"
@@ -508,6 +549,8 @@ def get_eligible_findings(findings: list[dict]) -> list[dict]:
             reason = "no fixed_code generated (architectural finding)"
         elif f.get("is_false_positive"):
             reason = "marked as false positive"
+        elif f.get("remediation_status") not in {None, "suggested", "validated_locally"}:
+            reason = f"remediation status is {f.get('remediation_status')}"
 
         if reason:
             skipped.append({
@@ -584,7 +627,7 @@ def create_fix_pr(
 
         fixes_by_file = {}
         for finding in eligible:
-            relative_path = _normalize_path(finding["file_path"], temp_dir)
+            relative_path = finding.get("repository_relative_path") or _normalize_path(finding["file_path"], temp_dir)
             if relative_path:
                 fixes_by_file.setdefault(relative_path, []).append(finding)
 
@@ -600,6 +643,11 @@ def create_fix_pr(
                 continue
 
             original = Path(local_path).read_text(encoding="utf-8", errors="ignore")
+            expected_hashes = {f.get("source_file_hash") for f in file_findings if f.get("source_file_hash")}
+            if expected_hashes and source_sha256(original) not in expected_hashes:
+                for finding in file_findings:
+                    skipped_fixes.append(_skip(finding, relative_path, "rejected_stale_source", "Source file hash differs from the scanned file; rerun the scan."))
+                continue
             content = original
             file_fixes = []
             for finding in file_findings:
@@ -628,6 +676,11 @@ def create_fix_pr(
                     validation["checks"].update(security["checks"])
                     if not valid:
                         validation = security
+                if valid:
+                    valid, regression = _validate_full_file_regression(finding, candidate)
+                    validation["checks"].update(regression["checks"])
+                    if not valid:
+                        validation = regression
                 validation_details.append({"file": relative_path, **validation})
                 if not valid:
                     Path(local_path).write_text(content, encoding="utf-8")
@@ -635,6 +688,7 @@ def create_fix_pr(
                     continue
 
                 content = candidate
+                finding["remediation_status"] = "security_regression_tested"
                 file_fixes.append({
                     "vuln_type": finding.get("vuln_type"), "severity": finding.get("severity"),
                     "cvss_score": finding.get("cvss_score"), "file": relative_path,
@@ -682,6 +736,7 @@ def create_fix_pr(
                 for fix in staged_fixes:
                     if fix["file"] == relative_path:
                         fix["status"] = "validated_and_applied"
+                        fix["remediation_status"] = "applied_in_pr"
                         applied_fixes.append(fix)
             except GithubException as e:
                 for fix in staged_fixes:

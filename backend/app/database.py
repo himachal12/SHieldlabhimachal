@@ -108,6 +108,14 @@ class Finding(Base):
     fixed_code = Column(Text, nullable=True)  # AI-generated fix
     fix_explanation = Column(Text, nullable=True)  # Why the fix works
     remediation_time = Column(String, nullable=True)  # "30 minutes", "1 hour", etc.
+    fix_source = Column(String, nullable=True)
+    remediation_status = Column(String, default="detected", nullable=False)
+    patch_validation_details = Column(Text, nullable=True)
+    source_file_hash = Column(String, nullable=True)
+    repository_relative_path = Column(String, nullable=True)
+    repository_commit = Column(String, nullable=True)
+    finding_rule_id = Column(String, nullable=True)
+    patch_kind = Column(String, nullable=True)
     
     # Confidence & filtering
     confidence = Column(Float, default=1.0)  # 0.0 - 1.0 (how confident are we?)
@@ -181,6 +189,21 @@ def init_db():
     Run this once at startup
     """
     Base.metadata.create_all(bind=engine)
+    # SQLite's create_all does not add columns to an existing development DB.
+    # Keep this small, idempotent migration so lifecycle/provenance fields are
+    # available without silently losing them after an upgrade.
+    if "sqlite" in DATABASE_URL:
+        required_columns = {
+            "fix_source": "VARCHAR", "remediation_status": "VARCHAR DEFAULT 'detected'",
+            "patch_validation_details": "TEXT", "source_file_hash": "VARCHAR",
+            "repository_relative_path": "VARCHAR", "repository_commit": "VARCHAR",
+            "finding_rule_id": "VARCHAR", "patch_kind": "VARCHAR",
+        }
+        with engine.begin() as connection:
+            existing = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(findings)")}
+            for name, sql_type in required_columns.items():
+                if name not in existing:
+                    connection.exec_driver_sql(f"ALTER TABLE findings ADD COLUMN {name} {sql_type}")
     print("✅ Database initialized")
 
 

@@ -5,6 +5,7 @@ framework-level categories) and returns one unified findings list.
 """
 
 import os
+from app.patches import repository_relative_path, source_sha256
 from app.scanners.bandit_runner import run_bandit
 from app.scanners.pattern_detector import ALL_DETECTORS
 from app.utils.logger import get_logger
@@ -50,6 +51,19 @@ def scan_codebase(repo_path: str) -> list[dict]:
     deduplicated = []
     seen = set()
     for finding in findings:
+        path = finding.get("file_path")
+        relative_path = repository_relative_path(path, repo_path) if path else None
+        if relative_path:
+            finding["repository_relative_path"] = relative_path
+            finding["file_path"] = relative_path
+            finding["_scan_file_path"] = path
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                    finding["source_file_hash"] = source_sha256(handle.read())
+            except OSError:
+                pass
+        finding.setdefault("remediation_status", "detected")
+        finding.setdefault("finding_rule_id", finding.get("bandit_test_id") or finding.get("source"))
         key = (
             os.path.normpath(finding.get("file_path") or ""),
             finding.get("line_number"),

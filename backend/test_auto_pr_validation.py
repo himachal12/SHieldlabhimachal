@@ -23,9 +23,32 @@ from app.agents.auto_pr import (
     _build_pr_description,
     _replace_with_context,
     _run_project_tests,
+    _validate_full_file_regression,
     _validate_vulnerability_fix,
     _validate_python_patch,
 )
+
+
+def test_full_file_secret_regression_rejects_duplicate_assignment():
+    valid, detail = _validate_full_file_regression({
+        "vuln_type": "Hardcoded Secrets",
+        "repository_relative_path": "settings.py",
+        "vulnerable_code": 'SECRET_KEY = "exposed"',
+    }, 'SECRET_KEY = os.environ["SECRET_KEY"]\nSECRET_KEY = os.environ["SECRET_KEY"]\n')
+
+    assert valid is False
+    assert detail["checks"]["single_secret_assignment"] == "failed"
+
+
+def test_full_file_secret_regression_requires_detector_to_clear():
+    valid, detail = _validate_full_file_regression({
+        "vuln_type": "Hardcoded Secrets",
+        "repository_relative_path": "settings.py",
+        "vulnerable_code": 'SECRET_KEY = "exposed"',
+    }, 'SECRET_KEY = os.environ["SECRET_KEY"]\nAPI_TOKEN = "still-exposed"\n')
+
+    assert valid is False
+    assert detail["checks"]["detector_rescan"] == "failed"
 
 
 def test_valid_python_patch_is_compiled(tmp_path):

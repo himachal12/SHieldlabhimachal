@@ -158,7 +158,7 @@ export default function Results() {
 
     const filtered = findings.filter((finding) => {
       const matchesSeverity = filter === 'ALL' || finding.severity === filter
-      const matchesFixable = !showFixableOnly || Boolean(finding.fixed_code)
+      const matchesFixable = !showFixableOnly || finding.remediation_status === 'suggested'
       const matchesChain = !showChainsOnly || Boolean(finding.is_cross_domain)
       const searchTarget = [
         finding.vuln_type,
@@ -328,7 +328,7 @@ export default function Results() {
             </div>
             <div className="space-y-3 text-sm">
               <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2">
-                <span className="text-slate-400">AI fixes returned</span>
+                <span className="text-slate-400">Suggestions</span>
                 <span className="font-bold text-green-300">{fixableCount}</span>
               </div>
               <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2">
@@ -485,7 +485,7 @@ export default function Results() {
               className={`result-toggle ${showFixableOnly ? 'is-active' : ''}`}
             >
               <Wrench size={14} />
-              Has AI fix ({fixableCount})
+              Suggested fixes ({fixableCount})
             </button>
             <button
               onClick={() => setShowChainsOnly(!showChainsOnly)}

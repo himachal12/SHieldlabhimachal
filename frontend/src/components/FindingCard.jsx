@@ -26,7 +26,25 @@ const getLocation = (finding) => {
 export default function FindingCard({ finding }) {
   const [expanded, setExpanded] = useState(false)
   const isCodeFinding = Boolean(finding.file_path)
-  const hasFix = Boolean(finding.fixed_code)
+  const remediationStatus = finding.remediation_status || (finding.fixed_code ? 'suggested' : 'detected')
+  const statusLabels = {
+    suggested: 'Suggested',
+    validated_locally: 'Validated locally',
+    security_regression_tested: 'Security tested',
+    project_tests_passed: 'Tests passed',
+    applied_in_pr: 'Applied in PR',
+    manual_review_required: 'Manual review',
+    generation_rejected: 'Rejected',
+    patch_rejected: 'Rejected',
+    test_validation_failed: 'Tests failed',
+    not_automatically_fixable: 'Manual review',
+  }
+  const statusLabel = statusLabels[remediationStatus] || 'Detected'
+  const statusClass = remediationStatus === 'applied_in_pr' || remediationStatus === 'project_tests_passed'
+    ? 'border-green-400/25 bg-green-500/10 text-green-200'
+    : remediationStatus.includes('rejected') || remediationStatus === 'test_validation_failed'
+      ? 'border-red-400/25 bg-red-500/10 text-red-200'
+      : 'border-amber-400/25 bg-amber-500/10 text-amber-100'
 
   return (
     <div className="finding-card mb-3 overflow-hidden">
@@ -49,10 +67,10 @@ export default function FindingCard({ finding }) {
                     Chain
                   </span>
                 )}
-                {hasFix && (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-green-400/25 bg-green-500/10 px-2 py-0.5 text-xs font-bold text-green-200">
+                {remediationStatus !== 'detected' && (
+                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-bold ${statusClass}`}>
                     <Wrench size={10} />
-                    AI fix
+                    {statusLabel}
                   </span>
                 )}
               </div>
