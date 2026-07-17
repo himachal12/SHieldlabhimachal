@@ -368,14 +368,12 @@ export default function Results() {
         </div>
 
         {results.scan_type !== 'web' && (
-          <AutoPRPanelErrorBoundary scanId={scanId}>
-            <AutoPRPanel
-              scanId={scanId}
-              repoUrl={results.repo_url}
-              scanType={results.scan_type}
-              findings={findings}
-            />
-          </AutoPRPanelErrorBoundary>
+          <AutoPRPanel
+            scanId={scanId}
+            repoUrl={results.repo_url}
+            scanType={results.scan_type}
+            findings={findings}
+          />
         )}
 
         {hasAttackChains && (
