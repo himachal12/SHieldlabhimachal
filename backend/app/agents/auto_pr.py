@@ -27,6 +27,7 @@ Key design decisions:
 
 import ast
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -36,6 +37,22 @@ from github import Github, GithubException
 from app.utils.logger import get_logger
 
 logger = get_logger("auto_pr")
+
+
+# LLM-generated security fixes can be syntactically valid while changing a
+# program's runtime behaviour. Do not auto-push these categories until they
+# have category-specific transformations and isolated runtime validation.
+# They remain visible in the results UI with their remediation guidance.
+MANUAL_REVIEW_ONLY_TYPES = frozenset({
+    "SQL Injection",
+    "Hardcoded Secrets",
+    "Weak Cryptography",
+    "Command Injection",
+    "Insecure Deserialization",
+    "Weak JWT Implementation",
+    "Unvalidated Redirects",
+    "XSS Vulnerabilities",
+})
 
 
 # ────────────────────────────────────────────────
@@ -177,6 +194,55 @@ def _validate_python_patch(file_path: str, original: str, candidate: str) -> tup
     }
 
 
+def _replace_with_context(
+    content: str, vulnerable_code: str, fixed_code: str
+) -> tuple[str | None, str | None]:
+    """Build an indentation-preserving, exact-match replacement candidate.
+
+    Auto-PR must never guess at a source location.  The vulnerable snippet must
+    occur exactly once, and a multi-line replacement must replace a complete
+    source statement (rather than, for example, just ``redirect(...)`` after a
+    ``return`` keyword).  The replacement is re-indented to match its source
+    line so multi-line LLM responses remain valid inside functions and blocks.
+    """
+    if not vulnerable_code.strip():
+        return None, "Vulnerable code snippet is empty."
+
+    occurrences = content.count(vulnerable_code)
+    if occurrences == 0:
+        return None, "Vulnerable code pattern not found in current file. File may have changed since scan."
+    if occurrences > 1:
+        return None, "Vulnerable code pattern appears multiple times; refusing ambiguous replacement."
+
+    match_start = content.index(vulnerable_code)
+    match_end = match_start + len(vulnerable_code)
+    line_start = content.rfind("\n", 0, match_start) + 1
+    line_end = content.find("\n", match_end)
+    if line_end == -1:
+        line_end = len(content)
+
+    prefix = content[line_start:match_start]
+    suffix = content[match_end:line_end]
+    replacement_lines = [line for line in fixed_code.splitlines() if line.strip()]
+
+    # A multi-line replacement can safely replace only an entire statement.
+    # Whitespace before a snippet is simply its block indentation; any other
+    # prefix/suffix means the scanner captured a partial expression.
+    if len(replacement_lines) > 1 and (prefix.strip() or suffix.strip()):
+        return None, (
+            "Generated multi-line fix targets only part of a source statement. "
+            "Manual review required."
+        )
+
+    indentation = re.match(r"[ \t]*", content[line_start:]).group(0)
+    replacement = _apply_indent(fixed_code.strip(), indentation)
+
+    # When the stored snippet omits indentation, replace from the physical line
+    # start to avoid retaining the original indentation *and* adding it again.
+    replace_start = line_start if not prefix.strip() else match_start
+    return content[:replace_start] + replacement + content[match_end:], None
+
+
 def get_eligible_findings(findings: list[dict]) -> list[dict]:
     """
     Filter findings that qualify for auto-fix.
@@ -211,6 +277,11 @@ def get_eligible_findings(findings: list[dict]) -> list[dict]:
             reason = "no fixed_code generated (architectural finding)"
         elif f.get("is_false_positive"):
             reason = "marked as false positive"
+        elif f.get("vuln_type") in MANUAL_REVIEW_ONLY_TYPES:
+            reason = (
+                "automatic patching is disabled for this vulnerability type "
+                "until isolated runtime validation is available"
+            )
 
         if reason:
             skipped.append({
@@ -282,7 +353,8 @@ def create_fix_pr(
         return _error_result(
             "No findings are eligible for auto-fix. "
             "Findings need: file_path, vulnerable_code, and fixed_code. "
-            "Web findings (headers, ports) cannot be auto-fixed."
+            "Web findings and LLM-generated fixes for complex vulnerability "
+            "types require manual review."
         )
 
     # ── Connect to GitHub ──────────────────────────────────────
@@ -434,12 +506,15 @@ def create_fix_pr(
                         local_path, content, candidate
                     )
 
-                if matched:
-                    file_applied_fixes.append({
+                validation_details.append({"file": relative_path, **validation})
+                if not is_valid:
+                    skipped_fixes.append({
                         "vuln_type": finding.get("vuln_type"),
                         "file": relative_path,
                         "line": finding.get("line_number"),
-                        "status": "pending_validation",
+                        "status": validation["status"],
+                        "reason": validation["reason"],
+                        "checks": validation["checks"],
                     })
                     logger.warning(
                         "Rejected generated fix %s in %s: %s",
@@ -504,49 +579,6 @@ def create_fix_pr(
                             "Vulnerable code pattern not found in current file. "
                             "File may have changed since scan was run."
                         )
-                    })
-                continue
-
-            # Validate the complete candidate file before it can be pushed.
-            if content != original_content and relative_path.endswith(".py"):
-                is_valid, validation = _validate_python_patch(
-                    local_path, original_content, content
-                )
-                validation_details.append({"file": relative_path, **validation})
-                if not is_valid:
-                    # The validator writes the candidate before py_compile. Restore the
-                    # original source and reject every patch in this file as a unit.
-                    with open(local_path, "w", encoding="utf-8") as handle:
-                        handle.write(original_content)
-                    for fix in file_applied_fixes:
-                        skipped_fixes.append({
-                            "vuln_type": fix["vuln_type"],
-                            "file": relative_path,
-                            "line": fix.get("line"),
-                            "status": validation["status"],
-                            "reason": validation["reason"],
-                            "checks": validation["checks"],
-                        })
-                    logger.warning(
-                        "Rejected generated fixes in %s: %s",
-                        relative_path,
-                        validation["reason"],
-                    )
-                    continue
-
-            if content != original_content and not relative_path.endswith(".py"):
-                validation = {
-                    "status": "rejected_unsupported_file_type",
-                    "checks": {},
-                    "reason": "Only Python files can be syntax-validated for Auto PR.",
-                }
-                validation_details.append({"file": relative_path, **validation})
-                for fix in file_applied_fixes:
-                    skipped_fixes.append({
-                        "vuln_type": fix["vuln_type"],
-                        "file": relative_path,
-                        "line": fix.get("line"),
-                        **validation,
                     })
                 continue
 

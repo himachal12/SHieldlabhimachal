@@ -19,7 +19,13 @@ if "github" not in sys.modules:
     sys.modules["github"] = github_stub
 
 from app.agents import auto_pr
-from app.agents.auto_pr import _build_pr_description, _validate_python_patch
+from app.agents.auto_pr import (
+    MANUAL_REVIEW_ONLY_TYPES,
+    _build_pr_description,
+    get_eligible_findings,
+    _replace_with_context,
+    _validate_python_patch,
+)
 
 
 def test_valid_python_patch_is_compiled(tmp_path):
@@ -69,11 +75,88 @@ def test_new_third_party_import_requires_manual_review(tmp_path):
     assert source_file.read_text(encoding="utf-8") == original
 
 
+def test_multiline_replacement_preserves_source_indentation():
+    content = (
+        "def get_user(name):\n"
+        "    query = f\"SELECT * FROM users WHERE username = '{name}'\"\n"
+    )
+
+    candidate, error = _replace_with_context(
+        content,
+        'query = f"SELECT * FROM users WHERE username = \'{name}\'"',
+        'query = "SELECT * FROM users WHERE username = ?"\n'
+        "cursor.execute(query, (name,))",
+    )
+
+    assert error is None
+    assert candidate == (
+        "def get_user(name):\n"
+        "    query = \"SELECT * FROM users WHERE username = ?\"\n"
+        "    cursor.execute(query, (name,))\n"
+    )
+
+
+def test_multiline_replacement_rejects_partial_statement():
+    content = "def endpoint():\n    return redirect(request.args.get('url'))\n"
+
+    candidate, error = _replace_with_context(
+        content,
+        "redirect(request.args.get('url'))",
+        "url = request.args.get('url', '/')\nreturn redirect(url)",
+    )
+
+    assert candidate is None
+    assert error == (
+        "Generated multi-line fix targets only part of a source statement. "
+        "Manual review required."
+    )
+
+
+def test_complex_llm_fixes_require_manual_review():
+    findings = [
+        {
+            "vuln_type": vuln_type,
+            "file_path": "app.py",
+            "line_number": 1,
+            "vulnerable_code": "value = 'unsafe'",
+            "fixed_code": "value = 'safe'",
+            "source": "bandit",
+        }
+        for vuln_type in MANUAL_REVIEW_ONLY_TYPES
+    ]
+
+    assert get_eligible_findings(findings) == []
+
+
+def test_manual_review_finding_never_connects_to_github(monkeypatch):
+    def unexpected_github_client(*args, **kwargs):
+        raise AssertionError("Manual-review findings must not start an Auto-PR")
+
+    monkeypatch.setattr(auto_pr, "Github", unexpected_github_client)
+
+    result = auto_pr.create_fix_pr(
+        github_token="test-token",
+        repo_url="https://github.com/owner/repo",
+        scan_id="scan_manual",
+        findings=[{
+            "vuln_type": "SQL Injection",
+            "file_path": "app.py",
+            "line_number": 1,
+            "vulnerable_code": "query = f'SELECT * FROM users WHERE id = {user_id}'",
+            "fixed_code": "query = 'SELECT * FROM users WHERE id = ?'",
+            "source": "bandit",
+        }],
+    )
+
+    assert result["success"] is False
+    assert "require manual review" in result["error"]
+
+
 def test_pr_description_reports_validation_and_skips():
     description = _build_pr_description(
         scan_id="scan_123",
         applied=[{
-            "vuln_type": "SQL Injection",
+            "vuln_type": "Other (test-only)",
             "file": "app.py",
             "line": 10,
             "severity": "HIGH",
@@ -142,7 +225,7 @@ def test_create_pr_does_not_push_a_syntax_invalid_patch(monkeypatch):
         repo_url="https://github.com/owner/repo",
         scan_id="scan_validation",
         findings=[{
-            "vuln_type": "SQL Injection",
+            "vuln_type": "Other (test-only)",
             "severity": "HIGH",
             "cvss_score": 8.0,
             "file_path": "app.py",
