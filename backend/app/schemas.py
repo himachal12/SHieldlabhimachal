@@ -176,6 +176,10 @@ class CreatePRRequest(BaseModel):
         ...,
         description="The GitHub repository URL to create the PR on"
     )
+    finding_ids: Optional[List[str]] = Field(
+        default=None,
+        description="Optional finding IDs to include. Omit to include every eligible finding."
+    )
 
     class Config:
         json_schema_extra = {
@@ -198,6 +202,7 @@ class PRResult(BaseModel):
     fixes_skipped: int = 0
     applied_details: List[dict] = []
     skipped_details: List[dict] = []
+    validation_details: List[dict] = []
     error: Optional[str] = None
 
     class Config:

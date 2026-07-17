@@ -286,6 +286,14 @@ async def create_fix_pr(
 
     # Get findings from database
     raw_findings = crud.get_findings_by_scan(db, request.scan_id)
+    if request.finding_ids is not None:
+        selected_ids = set(request.finding_ids)
+        raw_findings = [f for f in raw_findings if f.finding_id in selected_ids]
+        if not raw_findings:
+            raise HTTPException(
+                status_code=400,
+                detail="None of the selected findings belong to this completed scan."
+            )
 
     # Convert SQLAlchemy objects to dicts for the auto_pr module
     findings_dicts = []
@@ -319,11 +327,29 @@ async def create_fix_pr(
         f"on {request.repo_url}"
     )
 
-    result = _create_pr(
-        github_token=request.github_token,
-        repo_url=str(request.repo_url),
-        scan_id=request.scan_id,
-        findings=findings_dicts
-    )
+    try:
+        result = _create_pr(
+            github_token=request.github_token,
+            repo_url=str(request.repo_url),
+            scan_id=request.scan_id,
+            findings=findings_dicts
+        )
+    except Exception as exc:
+        logger.exception("Auto-PR engine failed before a PR could be created")
+        result = {
+            "success": False,
+            "pr_url": None,
+            "pr_number": None,
+            "branch_name": "",
+            "fixes_applied": 0,
+            "fixes_skipped": 0,
+            "applied_details": [],
+            "skipped_details": [],
+            "validation_details": [],
+            "error": (
+                "Auto-PR failed before any changes were pushed: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        }
 
     return schemas.PRResult(**result)
