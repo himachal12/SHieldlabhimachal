@@ -271,6 +271,14 @@ class FindingSchema(BaseModel):
     description: str
     vulnerable_code: Optional[str] = None
     fixed_code: Optional[str] = None
+    fix_source: Optional[str] = None
+    remediation_status: str = "detected"
+    patch_validation_details: Optional[str] = None
+    source_file_hash: Optional[str] = None
+    repository_relative_path: Optional[str] = None
+    repository_commit: Optional[str] = None
+    finding_rule_id: Optional[str] = None
+    patch_kind: Optional[str] = None
     fix_explanation: Optional[str] = None
     remediation_time: Optional[str] = None
     confidence: float = Field(1.0, ge=0.0, le=1.0)
