@@ -14,10 +14,51 @@ from app.utils.logger import get_logger
 
 logger = get_logger("pattern_detector")
 
+# Intentional, narrow names that commonly hold credentials. This complements
+# Bandit so scanner coverage is not limited to Bandit's secret-name heuristics.
+_SECRET_NAME = re.compile(
+    r"(?:secret|password|passwd|pwd|token|api[_-]?key|access[_-]?key|"
+    r"private[_-]?key|client[_-]?secret|stripe)",
+    re.IGNORECASE,
+)
+_SECRET_ASSIGNMENT = re.compile(
+    r"^(?P<indent>\s*)(?P<name>[A-Z][A-Z0-9_]*)\s*=\s*"
+    r"(?P<quote>['\"])(?P<value>.*?)(?P=quote)\s*(?:#.*)?$",
+    re.MULTILINE,
+)
+
 
 def _line_number(source: str, match_start: int) -> int:
     """Convert a regex match position into a 1-indexed line number."""
     return source[:match_start].count("\n") + 1
+
+
+def detect_hardcoded_secrets(file_path: str, source: str) -> list[dict]:
+    """Detect simple credential assignments that Bandit may not report.
+
+    The rule deliberately requires an all-caps assignment name and a non-empty
+    string literal. It does not attempt to classify ordinary configuration such
+    as ``DATABASE_URL`` unless its name itself signals a credential.
+    """
+    findings = []
+    for match in _SECRET_ASSIGNMENT.finditer(source):
+        name = match.group("name")
+        if not _SECRET_NAME.search(name):
+            continue
+        findings.append({
+            "vuln_type": "Hardcoded Secrets",
+            "severity": "HIGH",
+            "file_path": file_path,
+            "line_number": _line_number(source, match.start()),
+            "description": (
+                f"{name} contains a literal credential. Move it to a secret "
+                "manager or process environment and rotate the exposed value."
+            ),
+            "vulnerable_code": match.group(0).strip(),
+            "confidence": 0.95,
+            "source": "custom_secret_detector",
+        })
+    return findings
 
 
 def detect_missing_csrf(file_path: str, source: str) -> list[dict]:
@@ -194,6 +235,7 @@ def detect_unvalidated_redirects(file_path: str, source: str) -> list[dict]:
 
 # All custom detectors, run in sequence by the orchestrator
 ALL_DETECTORS = [
+    detect_hardcoded_secrets,
     detect_missing_csrf,
     detect_weak_jwt,
     detect_xss_risk,
