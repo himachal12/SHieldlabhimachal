@@ -24,6 +24,7 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
   const [selectedFindingIds, setSelectedFindingIds] = useState([])
+  const [allowUntested, setAllowUntested] = useState(false)
   const fixableFindings = findings.filter((finding) => finding.fixed_code && finding.finding_id)
   const testsUnavailable = result?.validation_details?.some(
     (detail) => detail.status === 'tests_not_available'
@@ -62,6 +63,7 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
           scan_id: scanId,
           github_token: token.trim(),
           repo_url: repoUrl,
+          allow_untested: allowUntested,
           ...(selectedFindingIds.length > 0 ? { finding_ids: selectedFindingIds } : {})
         })
       })
@@ -154,6 +156,17 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
               </div>
             </div>
 
+            {result.applied_details?.length > 0 && (
+              <div className="mt-3 text-xs text-slate-300">
+                <p className="mb-1 font-medium text-green-300">Applied in this PR:</p>
+                {result.applied_details.map((fix, i) => (
+                  <p key={i} className="break-words text-slate-400">
+                    • {fix.vuln_type} — <span className="font-mono">{fix.file}:{fix.line || 'N/A'}</span> ({fix.status})
+                  </p>
+                ))}
+              </div>
+            )}
+
             {/* Skipped details */}
             {result.skipped_details?.length > 0 && (
               <div className="mt-3 text-xs text-slate-400">
@@ -170,7 +183,7 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
 
               <ValidationDetails details={result.validation_details} />
               <p className="mt-3 text-xs text-slate-500">
-                “Validated” means the recorded checks passed. ShieldLabs does not push one-click security patches when repository tests are unavailable or failing.
+                “Validated” means the recorded checks passed. A PR without native tests is only created when you explicitly select manual review.
               </p>
           </div>
         )}
@@ -246,6 +259,19 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
                 </div>
               </div>
             )}
+
+            <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-lg border border-amber-400/25 bg-amber-400/10 p-3 text-xs text-amber-100">
+              <input
+                type="checkbox"
+                checked={allowUntested}
+                onChange={e => setAllowUntested(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Create a <strong>manual-review PR</strong> if this repository has no Python tests.
+                ShieldLabs will still require syntax and security validation, but cannot claim runtime test coverage.
+              </span>
+            </label>
 
             {/* Token input */}
             <div className="relative mb-3">

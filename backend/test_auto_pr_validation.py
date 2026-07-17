@@ -22,6 +22,7 @@ from app.agents import auto_pr
 from app.agents.auto_pr import (
     _build_pr_description,
     _replace_with_context,
+    _run_project_tests,
     _validate_vulnerability_fix,
     _validate_python_patch,
 )
@@ -151,6 +152,33 @@ def test_safe_parameterized_sql_patch_passes_category_check():
     assert valid is True
     assert detail["checks"]["parameterized_query"] == "passed"
 
+
+def test_sql_check_uses_the_changed_fix_not_other_file_findings():
+    candidate = (
+        'query = "SELECT * FROM users WHERE id = ?"\n'
+        'conn.execute(query, (user_id,))\n\n'
+        'query = f"SELECT * FROM users WHERE name = \'{name}\'"\n'
+        'conn.execute(query)\n'
+    )
+    fixed_region = (
+        'query = "SELECT * FROM users WHERE id = ?"\n'
+        'conn.execute(query, (user_id,))\n'
+    )
+
+    valid, detail = _validate_vulnerability_fix(
+        "SQL Injection", candidate, target_code=fixed_region
+    )
+
+    assert valid is True
+    assert detail["checks"]["parameterized_query"] == "passed"
+
+
+def test_explicit_manual_review_allows_no_test_suite(tmp_path):
+    valid, detail = _run_project_tests(str(tmp_path), allow_untested=True)
+
+    assert valid is True
+    assert detail["status"] == "tests_not_available"
+
 def test_pr_description_reports_validation_and_skips():
     description = _build_pr_description(
         scan_id="scan_123",
@@ -186,11 +214,13 @@ def test_create_pr_does_not_push_a_syntax_invalid_patch(monkeypatch):
         default_branch = "main"
         clone_url = "https://github.com/owner/repo.git"
         updated = False
+        branch_created = False
 
         def get_branch(self, name):
             return SimpleNamespace(commit=SimpleNamespace(sha="abc123"))
 
         def create_git_ref(self, **kwargs):
+            self.branch_created = True
             return None
 
         def get_contents(self, *args, **kwargs):
@@ -240,3 +270,61 @@ def test_create_pr_does_not_push_a_syntax_invalid_patch(monkeypatch):
     assert result["skipped_details"][0]["status"] == "rejected_syntax_error"
     assert result["validation_details"][0]["status"] == "rejected_syntax_error"
     assert repo.updated is False
+    assert repo.branch_created is False
+
+
+def test_manual_review_pushes_a_valid_fix_only_after_local_validation(monkeypatch):
+    class FakeRepo:
+        full_name = "owner/repo"
+        default_branch = "main"
+        clone_url = "https://github.com/owner/repo.git"
+        branch_created = False
+        updated_content = None
+
+        def get_branch(self, name):
+            return SimpleNamespace(commit=SimpleNamespace(sha="abc123"))
+
+        def create_git_ref(self, **kwargs):
+            self.branch_created = True
+
+        def get_contents(self, *args, **kwargs):
+            return SimpleNamespace(sha="file-sha")
+
+        def update_file(self, *args, **kwargs):
+            self.updated_content = kwargs["content"] if "content" in kwargs else args[2]
+
+        def create_pull(self, **kwargs):
+            return SimpleNamespace(html_url="https://github.com/owner/repo/pull/1", number=1)
+
+    repo = FakeRepo()
+    monkeypatch.setattr(auto_pr, "Github", lambda token: SimpleNamespace(get_repo=lambda name: repo))
+    real_run = auto_pr.subprocess.run
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["git", "clone"]:
+            destination = command[-1]
+            import os
+            os.makedirs(destination, exist_ok=True)
+            with open(os.path.join(destination, "app.py"), "w", encoding="utf-8") as handle:
+                handle.write('SECRET = "bad"\n')
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(auto_pr.subprocess, "run", fake_run)
+    result = auto_pr.create_fix_pr(
+        github_token="test-token",
+        repo_url="https://github.com/owner/repo",
+        scan_id="scan_valid",
+        allow_untested=True,
+        findings=[{
+            "vuln_type": "Hardcoded Secrets", "severity": "HIGH", "cvss_score": 7.5,
+            "file_path": "app.py", "line_number": 1,
+            "vulnerable_code": 'SECRET = "bad"',
+            "fixed_code": 'SECRET = os.environ.get("SECRET")', "source": "bandit",
+        }],
+    )
+
+    assert result["success"] is True
+    assert repo.branch_created is True
+    assert repo.updated_content == 'SECRET = os.environ.get("SECRET")\n'
+    assert result["validation_details"][-1]["status"] == "tests_not_available"

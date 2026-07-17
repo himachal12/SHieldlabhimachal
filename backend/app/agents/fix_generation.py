@@ -9,6 +9,7 @@ from app.utils.llm import ollama_call
 from app.utils.logger import get_logger
 from app.agents.fix_templates import get_template, is_fixable
 from app.agents.remediation_guides import get_remediation_guide
+from app.agents.deterministic_fixes import deterministic_fix
 
 logger = get_logger("fix_generation")
 
@@ -69,7 +70,14 @@ def generate_fix(finding: dict) -> dict:
         finding["fix_source"] = "static_guide"
         return finding
 
-    # CASE 2: Fixable category -- but only if we actually have a code snippet to work with
+    # CASE 2: Use an audited transformation for simple patterns first. These
+    # fixes do not depend on LLM syntax/indentation quality.
+    deterministic = deterministic_fix(finding)
+    if deterministic:
+        finding.update(deterministic)
+        return finding
+
+    # CASE 3: Fixable category -- but only if we actually have a code snippet to work with
     if is_fixable(vuln_type):
         code = finding.get("vulnerable_code")
         if not code:
@@ -98,7 +106,7 @@ def generate_fix(finding: dict) -> dict:
         finding["fix_source"] = "llm_generated"
         return finding
 
-    # CASE 3: Category we don't have fix logic for at all (e.g. "Other (...)" from Bandit)
+    # CASE 4: Category we do not have fix logic for at all (e.g. "Other (...)" from Bandit)
     finding["fixed_code"] = None
     finding["fix_explanation"] = "This finding type is outside current automated fix coverage -- manual review recommended."
     finding["remediation_time"] = "Manual review required"

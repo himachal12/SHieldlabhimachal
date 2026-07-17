@@ -154,6 +154,7 @@ def build_sqlmap_command(
         "--technique=BEU",
         "--no-cast",
         "--flush-session",
+        f"--max-requests={max_requests}",
     ]
     if params:
         command.extend(["-p", ",".join(params)])

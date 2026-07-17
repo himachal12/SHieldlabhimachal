@@ -180,6 +180,13 @@ class CreatePRRequest(BaseModel):
         default=None,
         description="Optional finding IDs to include. Omit to include every eligible finding."
     )
+    allow_untested: bool = Field(
+        default=False,
+        description=(
+            "Explicitly allow a manual-review PR when the repository has no "
+            "runnable Python test suite. Syntax and security checks still run."
+        ),
+    )
 
     class Config:
         json_schema_extra = {
