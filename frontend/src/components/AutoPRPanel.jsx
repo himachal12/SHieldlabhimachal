@@ -25,6 +25,9 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
   const [error, setError] = useState('')
   const [selectedFindingIds, setSelectedFindingIds] = useState([])
   const fixableFindings = findings.filter((finding) => finding.fixed_code && finding.finding_id)
+  const testsUnavailable = result?.validation_details?.some(
+    (detail) => detail.status === 'tests_not_available'
+  )
 
   const toggleFinding = (findingId) => {
     setSelectedFindingIds((selected) => (
@@ -116,6 +119,18 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
               </span>
             </div>
 
+            {result.remediation_status === 'partial' && (
+              <p className="mb-3 rounded-lg border border-yellow-400/30 bg-yellow-400/10 px-3 py-2 text-xs text-yellow-100">
+                Partial remediation: some requested fixes were safely skipped. Review the remaining findings before merging.
+              </p>
+            )}
+
+            {testsUnavailable && (
+              <p className="mb-3 rounded-lg border border-blue-400/30 bg-blue-400/10 px-3 py-2 text-xs text-blue-100">
+                Repository tests were not available. These patches passed syntax and category-specific safety checks, but still require normal code review before merging.
+              </p>
+            )}
+
             {/* PR Link */}
             <a
               href={result.pr_url}
@@ -159,7 +174,10 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
               </div>
             )}
 
-            <ValidationDetails details={result.validation_details} />
+              <ValidationDetails details={result.validation_details} />
+              <p className="mt-3 text-xs text-slate-500">
+                “Validated” means the recorded checks passed. Failed repository tests block a patch; unavailable tests are shown clearly for reviewer attention.
+              </p>
           </div>
         )}
 

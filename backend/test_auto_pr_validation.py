@@ -22,6 +22,8 @@ from app.agents import auto_pr
 from app.agents.auto_pr import (
     _build_pr_description,
     _replace_with_context,
+    _run_project_tests,
+    _validate_vulnerability_fix,
     _validate_python_patch,
 )
 
@@ -109,6 +111,54 @@ def test_multiline_replacement_rejects_partial_statement():
         "Manual review required."
     )
 
+
+def test_sql_patch_without_bound_parameters_is_rejected():
+    valid, detail = _validate_vulnerability_fix(
+        "SQL Injection",
+        'query = "SELECT * FROM users WHERE id = ?"\nconn.execute(query)\n',
+    )
+
+    assert valid is False
+    assert detail["status"] == "rejected_security_regression"
+    assert detail["checks"]["parameterized_query"] == "failed"
+
+
+def test_jwt_patch_that_still_disables_verification_is_rejected():
+    valid, detail = _validate_vulnerability_fix(
+        "Weak JWT Implementation",
+        'payload = jwt.decode(token, options={"verify_signature": False})\n',
+    )
+
+    assert valid is False
+    assert detail["status"] == "rejected_security_regression"
+
+
+def test_command_patch_reading_uncaptured_stdout_is_rejected():
+    valid, detail = _validate_vulnerability_fix(
+        "Command Injection",
+        'result = subprocess.run(["ping", host], shell=False).stdout.decode()\n',
+    )
+
+    assert valid is False
+    assert detail["status"] == "rejected_runtime_risk"
+
+
+def test_safe_parameterized_sql_patch_passes_category_check():
+    valid, detail = _validate_vulnerability_fix(
+        "SQL Injection",
+        'query = "SELECT * FROM users WHERE id = ?"\ncursor = conn.execute(query, (user_id,))\n',
+    )
+
+    assert valid is True
+    assert detail["checks"]["parameterized_query"] == "passed"
+
+
+def test_missing_repository_tests_are_disclosed_but_do_not_block_safe_patch(tmp_path):
+    valid, detail = _run_project_tests(str(tmp_path))
+
+    assert valid is True
+    assert detail["status"] == "tests_not_available"
+    assert detail["checks"]["project_tests"] == "not_available"
 
 def test_pr_description_reports_validation_and_skips():
     description = _build_pr_description(
