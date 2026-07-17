@@ -51,6 +51,7 @@ def run_code_scan_pipeline(
     Full pipeline for code scanning.
     Runs in a background task -- updates DB throughout.
     """
+    temp_path = None
     try:
         # ── Stage 1: Parse codebase ─────────────────────────────
         _update_progress(db, scan_id, 5, "Cloning and parsing repository...")
@@ -82,17 +83,12 @@ def run_code_scan_pipeline(
         import tempfile, shutil
         from app.utils.repo_handler import download_github_repo, extract_zip, cleanup_temp_repo
 
-        temp_path = None
-        try:
-            if repo_url:
-                temp_path = download_github_repo(repo_url)
-            elif zip_path:
-                temp_path = extract_zip(zip_path)
+        if repo_url:
+            temp_path = download_github_repo(repo_url)
+        elif zip_path:
+            temp_path = extract_zip(zip_path)
 
-            raw_findings = scan_codebase(temp_path)
-        finally:
-            if temp_path:
-                cleanup_temp_repo(temp_path)
+        raw_findings = scan_codebase(temp_path)
 
         logger.info(f"[{scan_id}] Raw findings: {len(raw_findings)}")
 
@@ -113,6 +109,11 @@ def run_code_scan_pipeline(
 
         from app.agents.severity_reasoning import reason_all_severities
         findings = reason_all_severities(findings)
+
+        # Deterministic fix generation reads source imports and complete
+        # statements. Keep the checkout available until it has completed.
+        cleanup_temp_repo(temp_path)
+        temp_path = None
 
         # ── Stage 6: Persist findings ────────────────────────────
         _update_progress(db, scan_id, 85, "Saving findings...")
@@ -139,6 +140,9 @@ def run_code_scan_pipeline(
             db, scan_id, status="failed",
             current_stage=f"Error: {str(e)[:200]}"
         )
+    finally:
+        if temp_path:
+            cleanup_temp_repo(temp_path)
 
 
 def run_web_scan_pipeline(

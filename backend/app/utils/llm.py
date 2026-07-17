@@ -28,7 +28,9 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 # OLLAMA (LOCAL)
 # ==================
 
-def ollama_call(prompt: str, model: str = None, timeout: int = 120) -> str:
+def ollama_call(
+    prompt: str, model: str = None, timeout: int = 120, system: str = None
+) -> str:
     """
     Call local Ollama instance (runs on your 4050 GPU)
     Use this for: code parsing, semantic analysis, fix generation
@@ -38,6 +40,7 @@ def ollama_call(prompt: str, model: str = None, timeout: int = 120) -> str:
         prompt: The text prompt to send
         model: Override default model (optional)
         timeout: Max seconds to wait for response
+        system: Optional Ollama system instruction for constrained tasks
 
     Returns:
         The model's text response, or empty string on failure
@@ -46,13 +49,16 @@ def ollama_call(prompt: str, model: str = None, timeout: int = 120) -> str:
     start = time.time()
 
     try:
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+        }
+        if system:
+            payload["system"] = system
         response = requests.post(
             f"{OLLAMA_BASE_URL}/api/generate",
-            json={
-                "model": model,
-                "prompt": prompt,
-                "stream": False  # Get full response at once, not token-by-token
-            },
+            json=payload,
             timeout=timeout
         )
         response.raise_for_status()

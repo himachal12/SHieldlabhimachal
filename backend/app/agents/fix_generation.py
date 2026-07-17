@@ -4,13 +4,47 @@ For each finding: either generate a real code fix via LLM (fixable categories)
 or attach a pre-written remediation guide (architectural categories).
 """
 
+import ast
 import json
+from pathlib import Path
 from app.utils.llm import ollama_call
 from app.utils.logger import get_logger
 from app.agents.fix_templates import get_template, is_fixable
 from app.agents.remediation_guides import get_remediation_guide
+from app.agents.deterministic_fixes import deterministic_fix
 
 logger = get_logger("fix_generation")
+
+FIX_GENERATION_SYSTEM_PROMPT = """You are ShieldLabs' conservative security-patch generator.
+Return only the requested JSON object. Preserve the existing function contract,
+variables, indentation, and unrelated behavior. Never invent dependencies or
+imports. Never replace a partial expression with multiple statements. If the
+provided context is insufficient for a safe patch, return valid JSON with an
+empty fixed_code and explain that manual review is required. Before responding,
+check Python syntax mentally, preserve all delimiters, and verify that the
+specific vulnerability is removed without changing unrelated logic."""
+
+
+def _build_fix_prompt(finding: dict, template: str) -> str:
+    """Provide the model the full enclosing function and imports when available."""
+    prompt = template.format(code=finding.get("vulnerable_code", ""))
+    path, line = finding.get("file_path"), finding.get("line_number")
+    if not path or not isinstance(line, int):
+        return prompt
+    try:
+        source = Path(path).read_text(encoding="utf-8", errors="ignore")
+        tree = ast.parse(source)
+    except (OSError, SyntaxError):
+        return prompt
+    imports = [line for line in source.splitlines() if line.startswith(("import ", "from "))]
+    functions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    owners = [node for node in functions if node.lineno <= line <= node.end_lineno]
+    function_source = ast.get_source_segment(source, min(owners, key=lambda node: node.end_lineno - node.lineno)) if owners else ""
+    return (
+        f"{prompt}\n\nFILE IMPORTS:\n" + "\n".join(imports) +
+        f"\n\nENCLOSING FUNCTION:\n{function_source}\n"
+        "Generate a minimal replacement only for VULNERABLE CODE above."
+    )
 
 
 def _parse_llm_fix_response(response: str) -> dict | None:
@@ -69,7 +103,14 @@ def generate_fix(finding: dict) -> dict:
         finding["fix_source"] = "static_guide"
         return finding
 
-    # CASE 2: Fixable category -- but only if we actually have a code snippet to work with
+    # CASE 2: Use an audited transformation for simple patterns first. These
+    # fixes do not depend on LLM syntax/indentation quality.
+    deterministic = deterministic_fix(finding)
+    if deterministic:
+        finding.update(deterministic)
+        return finding
+
+    # CASE 3: Fixable category -- but only if we actually have a code snippet to work with
     if is_fixable(vuln_type):
         code = finding.get("vulnerable_code")
         if not code:
@@ -80,8 +121,8 @@ def generate_fix(finding: dict) -> dict:
             return finding
 
         template = get_template(vuln_type)
-        prompt = template.format(code=code)
-        response = ollama_call(prompt)
+        prompt = _build_fix_prompt(finding, template)
+        response = ollama_call(prompt, system=FIX_GENERATION_SYSTEM_PROMPT)
 
         parsed = _parse_llm_fix_response(response)
         if parsed is None:
@@ -98,7 +139,7 @@ def generate_fix(finding: dict) -> dict:
         finding["fix_source"] = "llm_generated"
         return finding
 
-    # CASE 3: Category we don't have fix logic for at all (e.g. "Other (...)" from Bandit)
+    # CASE 4: Category we do not have fix logic for at all (e.g. "Other (...)" from Bandit)
     finding["fixed_code"] = None
     finding["fix_explanation"] = "This finding type is outside current automated fix coverage -- manual review recommended."
     finding["remediation_time"] = "Manual review required"

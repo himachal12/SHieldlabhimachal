@@ -33,6 +33,7 @@ import sys
 import uuid
 import shutil
 import tempfile
+from pathlib import Path
 from github import Github, GithubException
 from app.utils.logger import get_logger
 
@@ -58,7 +59,9 @@ def _calls_in_tree(tree: ast.AST, name: str) -> list[ast.Call]:
     return calls
 
 
-def _validate_vulnerability_fix(vuln_type: str, candidate: str) -> tuple[bool, dict]:
+def _validate_vulnerability_fix(
+    vuln_type: str, candidate: str, target_code: str | None = None
+) -> tuple[bool, dict]:
     """Apply conservative, deterministic security checks for generated fixes.
 
     Syntax validity alone cannot establish that an AI patch fixes the security
@@ -66,14 +69,18 @@ def _validate_vulnerability_fix(vuln_type: str, candidate: str) -> tuple[bool, d
     is unambiguous. A patch which cannot satisfy a guard is kept out of the PR
     and left for manual review.
     """
+    # Category checks apply to the generated replacement only. Checking the
+    # entire candidate file rejects a correct finding when a different finding
+    # of the same category remains elsewhere in that file.
+    scope = target_code if target_code is not None else candidate
     checks = {}
     try:
-        tree = ast.parse(candidate)
+        tree = ast.parse(scope)
     except SyntaxError:
         # The caller records the more useful syntax error separately.
         return True, {"status": "not_run", "checks": checks, "reason": "Security checks deferred to syntax validation."}
 
-    source_lower = candidate.lower()
+    source_lower = scope.lower()
     if vuln_type == "SQL Injection":
         query_execute_calls = [
             call for call in _calls_in_tree(tree, "execute")
@@ -110,7 +117,7 @@ def _validate_vulnerability_fix(vuln_type: str, candidate: str) -> tuple[bool, d
         checks["jwt_allowed_algorithms"] = "passed"
 
     elif vuln_type == "Unvalidated Redirects":
-        unsafe_redirect = re.search(r"redirect\(\s*request\.(args|form|values)\.get\(", candidate)
+        unsafe_redirect = re.search(r"redirect\(\s*request\.(args|form|values)\.get\(", scope)
         if unsafe_redirect:
             checks["redirect_validation"] = "failed"
             return False, {
@@ -130,7 +137,7 @@ def _validate_vulnerability_fix(vuln_type: str, candidate: str) -> tuple[bool, d
                     "checks": checks,
                     "reason": "Command patch still enables shell=True.",
                 }
-        if ".stdout" in candidate and run_calls and not any(
+        if ".stdout" in scope and run_calls and not any(
             any(keyword.arg in {"capture_output", "stdout"} for keyword in call.keywords)
             for call in run_calls
         ):
@@ -144,7 +151,7 @@ def _validate_vulnerability_fix(vuln_type: str, candidate: str) -> tuple[bool, d
         checks["subprocess_output"] = "passed"
 
     elif vuln_type == "Insecure Deserialization":
-        if re.search(r"\bpickle\.(loads|load)\s*\(", candidate):
+        if re.search(r"\bpickle\.(loads|load)\s*\(", scope):
             checks["unsafe_deserialization"] = "failed"
             return False, {
                 "status": "rejected_security_regression",
@@ -164,6 +171,36 @@ def _validate_vulnerability_fix(vuln_type: str, candidate: str) -> tuple[bool, d
         checks["weak_hash_removed"] = "passed"
 
     return True, {"status": "security_checks_passed", "checks": checks, "reason": "Category-specific security checks passed."}
+
+
+def _security_scope(candidate: str, fixed_code: str) -> str:
+    """Return the enclosing function for a uniquely inserted replacement.
+
+    SQL validation needs to inspect both query construction and its nearby
+    execution call. Restricting that inspection to the enclosing function
+    avoids treating independent findings in other functions as regressions.
+    """
+    try:
+        tree = ast.parse(candidate)
+    except SyntaxError:
+        return fixed_code
+    start = candidate.find(fixed_code)
+    if start < 0:
+        # Replacements are re-indented to their containing block. Locate the
+        # first non-empty generated line when the stored LLM output had no
+        # indentation of its own.
+        first_line = next((line.strip() for line in fixed_code.splitlines() if line.strip()), "")
+        if first_line:
+            matches = [match.start() for match in re.finditer(re.escape(first_line), candidate)]
+            start = matches[0] if len(matches) == 1 else -1
+    if start < 0 or candidate.find(fixed_code, start + len(fixed_code)) >= 0:
+        return fixed_code
+    line = candidate[:start].count("\n") + 1
+    functions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    containing = [node for node in functions if node.lineno <= line <= node.end_lineno]
+    if not containing:
+        return fixed_code
+    return ast.get_source_segment(candidate, min(containing, key=lambda node: node.end_lineno - node.lineno)) or fixed_code
 
 
 # ────────────────────────────────────────────────
@@ -305,7 +342,9 @@ def _validate_python_patch(file_path: str, original: str, candidate: str) -> tup
     }
 
 
-def _run_project_tests(repo_dir: str) -> tuple[bool, dict]:
+def _run_project_tests(
+    repo_dir: str, allow_untested: bool = False
+) -> tuple[bool, dict]:
     """Run an existing Python test suite in the fresh checkout when present.
 
     We never invent or install dependencies in a customer's repository. A
@@ -318,6 +357,15 @@ def _run_project_tests(repo_dir: str) -> tuple[bool, dict]:
         for name in files
     )
     if not has_tests:
+        if allow_untested:
+            return True, {
+                "status": "tests_not_available",
+                "checks": {"project_tests": "not_available"},
+                "reason": (
+                    "No Python test suite found. User explicitly requested a "
+                    "manual-review PR after syntax and security validation."
+                ),
+            }
         return False, {
             "status": "rejected_test_validation_unavailable",
             "checks": {"project_tests": "not_available"},
@@ -463,37 +511,22 @@ def create_fix_pr(
     github_token: str,
     repo_url: str,
     scan_id: str,
-    findings: list[dict]
+    findings: list[dict],
+    allow_untested: bool = False,
 ) -> dict:
-    """
-    Main entry point. Creates a PR with auto-applied fixes.
+    """Validate every candidate locally, then create one branch and PR.
 
-    Args:
-        github_token: Personal access token with repo write access
-        repo_url:     Full GitHub URL (https://github.com/owner/repo)
-        scan_id:      For branch naming and PR description
-        findings:     All findings from the scan (we filter internally)
-
-    Returns:
-        {
-            "success": bool,
-            "pr_url": str | None,
-            "pr_number": int | None,
-            "branch_name": str,
-            "fixes_applied": int,
-            "fixes_skipped": int,
-            "skipped_details": [...],
-            "error": str | None
-        }
+    A remote branch is never created until at least one candidate has passed
+    patch-level checks, final file compilation, and the selected test policy.
+    ``allow_untested`` is an explicit manual-review escape hatch: it permits a
+    PR only after syntax and security checks pass, and reports that native tests
+    were unavailable.
     """
-    # ── Validate inputs ────────────────────────────────────────
     if not github_token or not github_token.strip():
         return _error_result("GitHub token is required")
-
     if not repo_url:
         return _error_result("Repository URL is required")
 
-    # ── Parse owner/repo from URL ──────────────────────────────
     owner, repo_name = _parse_repo_url(repo_url)
     if not owner or not repo_name:
         return _error_result(
@@ -501,372 +534,179 @@ def create_fix_pr(
             "Expected format: https://github.com/owner/repo"
         )
 
-    # ── Filter eligible findings ───────────────────────────────
     eligible = get_eligible_findings(findings)
     if not eligible:
         return _error_result(
-            "No findings are eligible for auto-fix. "
-            "Findings need: file_path, vulnerable_code, and fixed_code. "
-            "Web findings (headers, ports) cannot be auto-fixed."
+            "No findings are eligible for auto-fix. Findings need: file_path, "
+            "vulnerable_code, and fixed_code. Web findings cannot be auto-fixed."
         )
 
-    # ── Connect to GitHub ──────────────────────────────────────
     try:
-        g = Github(github_token)
-        repo = g.get_repo(f"{owner}/{repo_name}")
-        logger.info(f"Connected to GitHub repo: {repo.full_name}")
-    except GithubException as e:
-        if e.status == 401:
-            return _error_result(
-                "GitHub token is invalid or expired. "
-                "Create a new token at github.com/settings/tokens "
-                "with 'repo' scope (full read/write access)."
-            )
-        elif e.status == 404:
-            return _error_result(
-                f"Repository not found: {owner}/{repo_name}. "
-                "Check the URL is correct and your token has access."
-            )
-        return _error_result(f"GitHub connection failed: {str(e)}")
-
-    # ── Create branch ──────────────────────────────────────────
-    branch_suffix = scan_id.replace("scan_", "")[:8]
-    branch_name = f"shieldlabs-fixes-{branch_suffix}"
-
-    try:
+        repo = Github(github_token).get_repo(f"{owner}/{repo_name}")
         default_branch = repo.default_branch
         source_sha = repo.get_branch(default_branch).commit.sha
-        repo.create_git_ref(
-            ref=f"refs/heads/{branch_name}",
-            sha=source_sha
-        )
-        logger.info(f"Created branch: {branch_name} from {default_branch}")
     except GithubException as e:
-        if e.status == 422:
-            # Branch already exists (re-run of same scan)
-            logger.warning(f"Branch {branch_name} already exists, reusing")
-        else:
-            return _error_result(f"Failed to create branch: {str(e)}")
+        return _error_result(f"GitHub connection failed: {str(e)}")
 
-    # ── Clone repo to apply fixes locally ─────────────────────
     temp_dir = tempfile.mkdtemp(prefix="shieldlabs_pr_")
+    skipped_fixes, validation_details, staged_files = [], [], {}
+    staged_fixes = []
     try:
-        # Build authenticated clone URL
-        auth_url = repo.clone_url.replace(
-            "https://",
-            f"https://{github_token}@"
-        )
-
-        import subprocess
+        auth_url = repo.clone_url.replace("https://", f"https://{github_token}@")
         subprocess.run(
             ["git", "clone", "--depth", "1", auth_url, temp_dir],
-            check=True,
-            capture_output=True,
-            timeout=60
+            check=True, capture_output=True, timeout=60,
         )
-        logger.info(f"Cloned repo to {temp_dir}")
 
-    except subprocess.CalledProcessError as e:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        return _error_result(f"Failed to clone repository: {e.stderr.decode()[:200]}")
-    except Exception as e:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        return _error_result(f"Clone failed: {str(e)}")
+        fixes_by_file = {}
+        for finding in eligible:
+            relative_path = _normalize_path(finding["file_path"], temp_dir)
+            if relative_path:
+                fixes_by_file.setdefault(relative_path, []).append(finding)
 
-    # ── Group findings by file ─────────────────────────────────
-    fixes_by_file = {}
-    for finding in eligible:
-        file_path = finding["file_path"]
-
-        # Normalize path — remove leading slashes, make relative
-        # (stored paths might be absolute from the clone temp dir)
-        normalized = _normalize_path(file_path, temp_dir)
-        if not normalized:
-            continue
-
-        if normalized not in fixes_by_file:
-            fixes_by_file[normalized] = []
-        fixes_by_file[normalized].append(finding)
-
-    logger.info(f"Fixes span {len(fixes_by_file)} file(s)")
-
-    # ── Apply fixes file by file ───────────────────────────────
-    applied_fixes = []
-    skipped_fixes = []
-    validation_details = []
-
-    try:
         for relative_path, file_findings in fixes_by_file.items():
             local_path = os.path.join(temp_dir, relative_path)
-
-            if not os.path.exists(local_path):
-                for f in file_findings:
-                    skipped_fixes.append({
-                        "vuln_type": f.get("vuln_type"),
-                        "file": relative_path,
-                        "status": "skipped_file_not_found",
-                        "reason": f"File not found in repo: {relative_path}"
-                    })
+            if not os.path.isfile(local_path):
+                for finding in file_findings:
+                    skipped_fixes.append(_skip(finding, relative_path, "skipped_file_not_found", "File not found in repository."))
+                continue
+            if not relative_path.endswith(".py"):
+                for finding in file_findings:
+                    skipped_fixes.append(_skip(finding, relative_path, "rejected_unsupported_file_type", "Only Python files can be automatically validated."))
                 continue
 
-            # Read current file content
-            with open(local_path, 'r', encoding='utf-8', errors='ignore') as fh:
-                content = fh.read()
-
-            original_content = content  # keep for comparison
-            file_applied_fixes = []
-
-            # Apply and validate each fix independently. One rejected fix must
-            # never discard another fix that already passed validation.
+            original = Path(local_path).read_text(encoding="utf-8", errors="ignore")
+            content = original
+            file_fixes = []
             for finding in file_findings:
                 vulnerable_code = finding.get("vulnerable_code", "")
                 fixed_code = finding.get("fixed_code", "").strip()
-
                 if not vulnerable_code.strip() or not fixed_code:
-                    skipped_fixes.append({
-                        "vuln_type": finding.get("vuln_type"),
-                        "file": relative_path,
-                        "status": "skipped_missing_patch",
-                        "reason": "Empty vulnerable_code or fixed_code"
-                    })
+                    skipped_fixes.append(_skip(finding, relative_path, "skipped_missing_patch", "Empty vulnerable_code or fixed_code."))
                     continue
-
                 if _is_structural_rewrite(vulnerable_code, fixed_code):
-                    skipped_fixes.append({
-                        "vuln_type": finding.get("vuln_type"),
-                        "file": relative_path,
-                        "status": "rejected_unsafe_patch_boundary",
-                        "reason": (
-                            "AI-generated fix is a structural rewrite "
-                            "(e.g. adds a new function) rather than a drop-in "
-                            "replacement. Manual fix recommended."
-                        )
-                    })
+                    skipped_fixes.append(_skip(finding, relative_path, "rejected_unsafe_patch_boundary", "Generated fix is a structural rewrite; manual review required."))
+                    continue
+                candidate, replacement_error = _replace_with_context(content, vulnerable_code, fixed_code)
+                if candidate is None:
+                    skipped_fixes.append(_skip(finding, relative_path, "rejected_unsafe_patch_boundary", replacement_error))
                     continue
 
-                candidate, replacement_error = _replace_with_context(
-                    content, vulnerable_code, fixed_code
-                )
-                if candidate is None:
-                    validation = {
-                        "status": "rejected_unsafe_patch_boundary",
-                        "checks": {},
-                        "reason": replacement_error,
-                    }
-                    is_valid = False
-                else:
-                    is_valid, validation = _validate_python_patch(
-                        local_path, content, candidate
+                valid, validation = _validate_python_patch(local_path, content, candidate)
+                if valid:
+                    # Check the enclosing function, not the entire file. This
+                    # retains SQL query/execution context while isolating an
+                    # independent finding in another function.
+                    valid, security = _validate_vulnerability_fix(
+                        finding.get("vuln_type", ""), candidate,
+                        target_code=_security_scope(candidate, fixed_code),
                     )
-
-                if is_valid:
-                    security_valid, security_validation = _validate_vulnerability_fix(
-                        finding.get("vuln_type", ""), candidate
-                    )
-                    validation["checks"].update(security_validation["checks"])
-                    if not security_valid:
-                        is_valid = False
-                        validation = security_validation
-                        # _validate_python_patch writes a successful candidate to
-                        # disk for py_compile. Do not let a rejected candidate
-                        # become the base for a later finding in this file.
-                        with open(local_path, "w", encoding="utf-8") as handle:
-                            handle.write(content)
-
+                    validation["checks"].update(security["checks"])
+                    if not valid:
+                        validation = security
                 validation_details.append({"file": relative_path, **validation})
-                if not is_valid:
-                    skipped_fixes.append({
-                        "vuln_type": finding.get("vuln_type"),
-                        "file": relative_path,
-                        "line": finding.get("line_number"),
-                        "status": validation["status"],
-                        "reason": validation["reason"],
-                        "checks": validation["checks"],
-                    })
-                    logger.warning(
-                        "Rejected generated fix %s in %s: %s",
-                        finding.get("vuln_type"), relative_path, validation["reason"],
-                    )
+                if not valid:
+                    Path(local_path).write_text(content, encoding="utf-8")
+                    skipped_fixes.append(_skip(finding, relative_path, validation["status"], validation["reason"], validation["checks"]))
                     continue
 
                 content = candidate
-                file_applied_fixes.append({
-                    "vuln_type": finding.get("vuln_type"),
-                    "severity": finding.get("severity"),
-                    "cvss_score": finding.get("cvss_score"),
-                    "file": relative_path,
-                    "line": finding.get("line_number"),
-                    "status": "pending_push",
+                file_fixes.append({
+                    "vuln_type": finding.get("vuln_type"), "severity": finding.get("severity"),
+                    "cvss_score": finding.get("cvss_score"), "file": relative_path,
+                    "line": finding.get("line_number"), "status": "staged",
                 })
-                logger.info(
-                    "Validated staged fix: %s in %s",
-                    finding.get("vuln_type"), relative_path,
-                )
 
-            # Validate the complete candidate file before it can be pushed.
-            if content != original_content and relative_path.endswith(".py"):
-                is_valid, validation = _validate_python_patch(
-                    local_path, original_content, content
-                )
-                validation_details.append({"file": relative_path, **validation})
-                if not is_valid:
-                    # The validator writes the candidate before py_compile. Restore the
-                    # original source and reject every patch in this file as a unit.
-                    with open(local_path, "w", encoding="utf-8") as handle:
-                        handle.write(original_content)
-                    for fix in file_applied_fixes:
-                        skipped_fixes.append({
-                            "vuln_type": fix["vuln_type"],
-                            "file": relative_path,
-                            "line": fix.get("line"),
-                            "status": validation["status"],
-                            "reason": validation["reason"],
-                            "checks": validation["checks"],
-                        })
-                    logger.warning(
-                        "Rejected generated fixes in %s: %s",
-                        relative_path,
-                        validation["reason"],
-                    )
-                    continue
-
-                tests_valid, test_validation = _run_project_tests(temp_dir)
-                validation_details.append({"file": relative_path, **test_validation})
-                if not tests_valid:
-                    with open(local_path, "w", encoding="utf-8") as handle:
-                        handle.write(original_content)
-                    for fix in file_applied_fixes:
-                        skipped_fixes.append({
-                            "vuln_type": fix["vuln_type"],
-                            "file": relative_path,
-                            "line": fix.get("line"),
-                            "status": test_validation["status"],
-                            "reason": test_validation["reason"],
-                            "checks": test_validation["checks"],
-                        })
-                    logger.warning(
-                        "Rejected generated fixes in %s because tests failed: %s",
-                        relative_path, test_validation["reason"],
-                    )
-                    continue
-
-            if content != original_content and not relative_path.endswith(".py"):
-                validation = {
-                    "status": "rejected_unsupported_file_type",
-                    "checks": {},
-                    "reason": "Only Python files can be syntax-validated for Auto PR.",
-                }
-                validation_details.append({"file": relative_path, **validation})
-                for fix in file_applied_fixes:
-                    skipped_fixes.append({
-                        "vuln_type": fix["vuln_type"],
-                        "file": relative_path,
-                        "status": "skipped_source_changed",
-                        "reason": (
-                            "Vulnerable code pattern not found in current file. "
-                            "File may have changed since scan was run."
-                        )
-                    })
+            if content == original:
                 continue
+            valid, validation = _validate_python_patch(local_path, original, content)
+            validation_details.append({"file": relative_path, **validation})
+            if not valid:
+                Path(local_path).write_text(original, encoding="utf-8")
+                for fix in file_fixes:
+                    skipped_fixes.append({**fix, "status": validation["status"], "reason": validation["reason"], "checks": validation["checks"]})
+                continue
+            staged_files[relative_path] = content
+            staged_fixes.extend(file_fixes)
 
-            # Push only a fully validated candidate file.
-            if content != original_content:
-                try:
-                    # Get the file's SHA (needed for GitHub API update)
-                    gh_file = repo.get_contents(relative_path, ref=branch_name)
-                    repo.update_file(
-                        path=relative_path,
-                        message=f"fix: Apply ShieldLabs security fixes in {relative_path}",
-                        content=content,
-                        sha=gh_file.sha,
-                        branch=branch_name
-                    )
-                    for fix in file_applied_fixes:
+        if not staged_files:
+            return _no_fixes_result("No fixes were staged because generated changes failed validation.", skipped_fixes, validation_details)
+
+        tests_valid, test_validation = _run_project_tests(temp_dir, allow_untested=allow_untested)
+        validation_details.append({"file": "repository", **test_validation})
+        if not tests_valid:
+            return _no_fixes_result("No fixes were pushed because repository test validation failed.", skipped_fixes + [
+                {**fix, "status": test_validation["status"], "reason": test_validation["reason"], "checks": test_validation["checks"]}
+                for fix in staged_fixes
+            ], validation_details)
+
+        branch_name = f"shieldlabs-fixes-{scan_id.replace('scan_', '')[:8]}"
+        try:
+            # Ensure validation was performed against the current base.
+            if repo.get_branch(default_branch).commit.sha != source_sha:
+                return _no_fixes_result("Repository changed during validation; rerun the scan before creating a PR.", skipped_fixes, validation_details)
+            repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=source_sha)
+        except GithubException as e:
+            if e.status != 422:
+                return _error_result(f"Failed to create branch: {str(e)}")
+
+        applied_fixes = []
+        for relative_path, content in staged_files.items():
+            try:
+                gh_file = repo.get_contents(relative_path, ref=branch_name)
+                repo.update_file(relative_path, f"fix: Apply ShieldLabs security fixes in {relative_path}", content, gh_file.sha, branch=branch_name)
+                for fix in staged_fixes:
+                    if fix["file"] == relative_path:
                         fix["status"] = "validated_and_applied"
-                    applied_fixes.extend(file_applied_fixes)
-                    logger.info(f"  Pushed fixed {relative_path} to {branch_name}")
-                except GithubException as e:
-                    logger.error(f"  Failed to push {relative_path}: {e}")
-                    # Move these from applied to skipped
-                    failed_types = [f.get("vuln_type") for f in file_findings]
-                    for ft in failed_types:
-                        skipped_fixes.append({
-                            "vuln_type": ft,
-                            "file": relative_path,
-                            "status": "rejected_push_error",
-                            "reason": f"GitHub push failed: {str(e)}"
-                        })
+                        applied_fixes.append(fix)
+            except GithubException as e:
+                for fix in staged_fixes:
+                    if fix["file"] == relative_path:
+                        skipped_fixes.append({**fix, "status": "rejected_push_error", "reason": f"GitHub push failed: {e}"})
 
-    finally:
-        # Always clean up temp directory
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        logger.info("Cleaned up temp directory")
+        if not applied_fixes:
+            _delete_branch(repo, branch_name)
+            return _no_fixes_result("No fixes were pushed because GitHub rejected the updates.", skipped_fixes, validation_details)
 
-    # If nothing got applied, don't open an empty PR
-    if not applied_fixes:
-        rejection_message = "No fixes could be applied. Review the validation details below."
-        if validation_details:
-            rejection_message = (
-                "No fixes were pushed because generated changes failed validation. "
-                "Review the validation details below."
-            )
-        return _error_result(
-            rejection_message,
-            extra={
-                "branch_name": branch_name,
-                "fixes_applied": 0,
-                "fixes_skipped": len(skipped_fixes),
-                "applied_details": [],
-                "skipped_details": skipped_fixes,
-                "validation_details": validation_details,
-            }
-        )
-
-    # ── Create Pull Request ────────────────────────────────────
-    pr_body = _build_pr_description(
-        scan_id=scan_id,
-        applied=applied_fixes,
-        skipped=skipped_fixes,
-        validations=validation_details,
-    )
-
-    try:
         pr = repo.create_pull(
-            title=f"🛡️ ShieldLabs: {len(applied_fixes)} Security Fix"
-                  f"{'es' if len(applied_fixes) != 1 else ''} Applied",
-            body=pr_body,
-            head=branch_name,
-            base=default_branch
+            title=f"🛡️ ShieldLabs: {len(applied_fixes)} Security Fix{'es' if len(applied_fixes) != 1 else ''} Applied",
+            body=_build_pr_description(scan_id, applied_fixes, skipped_fixes, validation_details),
+            head=branch_name, base=default_branch,
         )
-        logger.info(f"PR created: {pr.html_url}")
-
         return {
-            "success": True,
-            "pr_url": pr.html_url,
-            "pr_number": pr.number,
-            "branch_name": branch_name,
-            "fixes_applied": len(applied_fixes),
+            "success": True, "pr_url": pr.html_url, "pr_number": pr.number,
+            "branch_name": branch_name, "fixes_applied": len(applied_fixes),
             "fixes_skipped": len(skipped_fixes),
             "remediation_status": _remediation_status(len(applied_fixes), len(skipped_fixes)),
-            "applied_details": applied_fixes,
-            "skipped_details": skipped_fixes,
-            "validation_details": validation_details,
-            "error": None
+            "applied_details": applied_fixes, "skipped_details": skipped_fixes,
+            "validation_details": validation_details, "error": None,
         }
-
     except GithubException as e:
-        return _error_result(
-            f"Failed to create Pull Request: {str(e)}",
-            extra={
-                "branch_name": branch_name,
-                "fixes_applied": len(applied_fixes),
-                "fixes_skipped": len(skipped_fixes),
-                "remediation_status": _remediation_status(len(applied_fixes), len(skipped_fixes)),
-                "applied_details": applied_fixes,
-                "skipped_details": skipped_fixes,
-                "validation_details": validation_details,
-            }
-        )
+        return _error_result(f"GitHub PR operation failed: {str(e)}")
+    except (subprocess.CalledProcessError, OSError) as e:
+        return _error_result(f"Failed to clone or validate repository: {e}")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _skip(finding: dict, file_path: str, status: str, reason: str, checks: dict | None = None) -> dict:
+    """Build a consistent skipped-finding record."""
+    return {"vuln_type": finding.get("vuln_type"), "file": file_path,
+            "line": finding.get("line_number"), "status": status,
+            "reason": reason, "checks": checks or {}}
+
+
+def _no_fixes_result(message: str, skipped: list[dict], validations: list[dict]) -> dict:
+    return _error_result(message, extra={"fixes_skipped": len(skipped),
+        "skipped_details": skipped, "validation_details": validations})
+
+
+def _delete_branch(repo, branch_name: str) -> None:
+    """Best-effort cleanup for a branch with no successfully pushed changes."""
+    try:
+        repo.get_git_ref(f"heads/{branch_name}").delete()
+    except Exception as exc:
+        logger.warning("Could not delete empty branch %s: %s", branch_name, exc)
 
 
 # ────────────────────────────────────────────────
