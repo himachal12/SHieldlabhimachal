@@ -19,7 +19,11 @@ if "github" not in sys.modules:
     sys.modules["github"] = github_stub
 
 from app.agents import auto_pr
-from app.agents.auto_pr import _build_pr_description, _validate_python_patch
+from app.agents.auto_pr import (
+    _build_pr_description,
+    _replace_with_context,
+    _validate_python_patch,
+)
 
 
 def test_valid_python_patch_is_compiled(tmp_path):
@@ -67,6 +71,43 @@ def test_new_third_party_import_requires_manual_review(tmp_path):
     assert detail["status"] == "rejected_dependency"
     assert "bcrypt" in detail["reason"]
     assert source_file.read_text(encoding="utf-8") == original
+
+
+def test_multiline_replacement_preserves_source_indentation():
+    content = (
+        "def get_user(name):\n"
+        "    query = f\"SELECT * FROM users WHERE username = '{name}'\"\n"
+    )
+
+    candidate, error = _replace_with_context(
+        content,
+        'query = f"SELECT * FROM users WHERE username = \'{name}\'"',
+        'query = "SELECT * FROM users WHERE username = ?"\n'
+        "cursor.execute(query, (name,))",
+    )
+
+    assert error is None
+    assert candidate == (
+        "def get_user(name):\n"
+        "    query = \"SELECT * FROM users WHERE username = ?\"\n"
+        "    cursor.execute(query, (name,))\n"
+    )
+
+
+def test_multiline_replacement_rejects_partial_statement():
+    content = "def endpoint():\n    return redirect(request.args.get('url'))\n"
+
+    candidate, error = _replace_with_context(
+        content,
+        "redirect(request.args.get('url'))",
+        "url = request.args.get('url', '/')\nreturn redirect(url)",
+    )
+
+    assert candidate is None
+    assert error == (
+        "Generated multi-line fix targets only part of a source statement. "
+        "Manual review required."
+    )
 
 
 def test_pr_description_reports_validation_and_skips():
