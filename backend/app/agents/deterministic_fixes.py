@@ -31,14 +31,16 @@ def deterministic_fix(finding: dict) -> dict | None:
 
     if vuln_type == "Hardcoded Secrets":
         match = _SECRET_ASSIGNMENT.fullmatch(code)
-        if not match or not _has_os_import(finding):
+        if not match:
             return None
         name = match.group("name")
+        import_prefix = "" if _has_os_import(finding) else "import os\n"
         return {
-            "fixed_code": f'{name} = os.environ.get("{name}")',
+            "fixed_code": f'{import_prefix}{name} = os.environ["{name}"]',
             "fix_explanation": (
                 "The literal secret is removed from source and read from the "
-                "process environment at runtime. Configure the value outside version control."
+                "process environment at runtime. Rotate the exposed value and "
+                "configure the replacement outside version control."
             ),
             "remediation_time": "5 minutes",
             "fix_source": "deterministic",

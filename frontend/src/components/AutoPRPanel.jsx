@@ -127,6 +127,12 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
               </p>
             )}
 
+            {testsUnavailable && (
+              <p className="mb-3 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
+                This is a manual-review PR: no runnable Python test suite was available.
+              </p>
+            )}
+
             {/* PR Link */}
             <a
               href={result.pr_url}

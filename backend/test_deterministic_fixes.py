@@ -33,7 +33,7 @@ def test_hardcoded_secret_uses_deterministic_environment_lookup(monkeypatch, tmp
 
     result = generate_fix(finding)
 
-    assert result["fixed_code"] == 'API_KEY = os.environ.get("API_KEY")'
+    assert result["fixed_code"] == 'API_KEY = os.environ["API_KEY"]'
     assert result["fix_source"] == "deterministic"
 
 
@@ -65,12 +65,14 @@ def test_unknown_secret_shape_remains_for_manual_or_llm_handling():
     }) is None
 
 
-def test_secret_without_an_existing_os_import_is_not_auto_rewritten(tmp_path):
+def test_secret_without_an_existing_os_import_adds_a_safe_stdlib_import(tmp_path):
     source = tmp_path / "app.py"
     source.write_text('API_KEY = "secret-value"\n', encoding="utf-8")
 
-    assert deterministic_fix({
+    result = deterministic_fix({
         "vuln_type": "Hardcoded Secrets",
         "vulnerable_code": 'API_KEY = "secret-value"',
         "file_path": str(source),
-    }) is None
+    })
+
+    assert result["fixed_code"] == 'import os\nAPI_KEY = os.environ["API_KEY"]'

@@ -46,6 +46,25 @@ def test_valid_python_patch_is_compiled(tmp_path):
     assert source_file.read_text(encoding="utf-8") == candidate
 
 
+def test_secret_replacement_removes_literal_without_creating_duplicate_assignment(tmp_path):
+    source_file = tmp_path / "settings.py"
+    original = 'SECRET_KEY = "exposed"\n'
+    source_file.write_text(original, encoding="utf-8")
+
+    candidate, error = _replace_with_context(
+        original,
+        'SECRET_KEY = "exposed"',
+        'import os\nSECRET_KEY = os.environ["SECRET_KEY"]',
+    )
+    assert error is None
+    assert candidate == 'import os\nSECRET_KEY = os.environ["SECRET_KEY"]\n'
+    assert candidate.count("SECRET_KEY =") == 1
+
+    is_valid, detail = _validate_python_patch(str(source_file), original, candidate)
+    assert is_valid is True
+    assert detail["status"] == "validated"
+
+
 def test_invalid_python_patch_is_rejected_before_push(tmp_path):
     source_file = tmp_path / "service.py"
     original = "value = 1\n"

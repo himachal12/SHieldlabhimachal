@@ -45,9 +45,25 @@ def scan_codebase(repo_path: str) -> list[dict]:
                 findings.extend(new_findings)
                 custom_count += len(new_findings)
 
-    bandit_count = len(findings) - custom_count
+    # Multiple scanners can correctly identify the same source line. Preserve
+    # the first result instead of generating duplicate suggestions/PR patches.
+    deduplicated = []
+    seen = set()
+    for finding in findings:
+        key = (
+            os.path.normpath(finding.get("file_path") or ""),
+            finding.get("line_number"),
+            finding.get("vuln_type"),
+            (finding.get("vulnerable_code") or "").strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduplicated.append(finding)
+
+    bandit_count = len(deduplicated) - custom_count
     logger.info(
-        f"Code scan complete: {len(findings)} total findings "
+        f"Code scan complete: {len(deduplicated)} total findings "
         f"({bandit_count} from Bandit, {custom_count} custom)"
     )
-    return findings
+    return deduplicated

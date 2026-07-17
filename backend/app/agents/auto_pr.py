@@ -81,7 +81,31 @@ def _validate_vulnerability_fix(
         return True, {"status": "not_run", "checks": checks, "reason": "Security checks deferred to syntax validation."}
 
     source_lower = scope.lower()
-    if vuln_type == "SQL Injection":
+    if vuln_type == "Hardcoded Secrets":
+        assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)]
+        if any(
+            isinstance(value := assignment.value, ast.Constant)
+            and isinstance(value.value, str)
+            and value.value
+            for assignment in assignments
+        ):
+            checks["secret_literal_removed"] = "failed"
+            return False, {
+                "status": "rejected_security_regression",
+                "checks": checks,
+                "reason": "Secret patch still contains a string literal assignment.",
+            }
+        if "os.environ" not in scope:
+            checks["secret_environment_lookup"] = "failed"
+            return False, {
+                "status": "rejected_security_regression",
+                "checks": checks,
+                "reason": "Secret patch does not read the value from the process environment.",
+            }
+        checks["secret_literal_removed"] = "passed"
+        checks["secret_environment_lookup"] = "passed"
+
+    elif vuln_type == "SQL Injection":
         query_execute_calls = [
             call for call in _calls_in_tree(tree, "execute")
             if call.args and isinstance(call.args[0], ast.Name) and call.args[0].id == "query"
