@@ -28,7 +28,7 @@ imports, and SQL placeholder/parameter consistency."""
 
 def _source_context(finding: dict) -> str:
     """Return bounded file context while the pipeline checkout still exists."""
-    path = finding.get("file_path")
+    path = finding.get("_scan_file_path") or finding.get("file_path")
     if not path:
         return "No source file context is available."
 
@@ -119,6 +119,7 @@ def generate_fix(finding: dict) -> dict:
         finding["fix_explanation"] = guide["fix_explanation"]
         finding["remediation_time"] = guide["remediation_time"]
         finding["fix_source"] = "static_guide"
+        finding["remediation_status"] = "manual_review_required"
         return finding
 
     # CASE 2: Use an audited transformation for simple patterns first. These
@@ -126,6 +127,8 @@ def generate_fix(finding: dict) -> dict:
     deterministic = deterministic_fix(finding)
     if deterministic:
         finding.update(deterministic)
+        finding["remediation_status"] = "suggested"
+        finding["patch_kind"] = "full_statement_replacement"
         return finding
 
     # CASE 3: Fixable category -- but only if we actually have a code snippet to work with
@@ -136,6 +139,7 @@ def generate_fix(finding: dict) -> dict:
             finding["fix_explanation"] = "No code snippet available to generate a fix from."
             finding["remediation_time"] = "Manual review required"
             finding["fix_source"] = "skipped_no_code"
+            finding["remediation_status"] = "manual_review_required"
             return finding
 
         template = get_template(vuln_type)
@@ -155,6 +159,7 @@ def generate_fix(finding: dict) -> dict:
             finding["fix_explanation"] = "Automated fix generation failed for this finding -- manual review recommended."
             finding["remediation_time"] = "Manual review required"
             finding["fix_source"] = "generation_failed"
+            finding["remediation_status"] = "generation_rejected"
             return finding
 
         if not parsed["fixed_code"].strip():
@@ -162,12 +167,15 @@ def generate_fix(finding: dict) -> dict:
             finding["fix_explanation"] = parsed["why_fix_works"]
             finding["remediation_time"] = "Manual review required"
             finding["fix_source"] = "manual_review_required"
+            finding["remediation_status"] = "manual_review_required"
             return finding
 
         finding["fixed_code"] = parsed["fixed_code"]
         finding["fix_explanation"] = f"{parsed['why_vulnerable']} {parsed['why_fix_works']}"
         finding["remediation_time"] = parsed["remediation_time"]
         finding["fix_source"] = "llm_generated"
+        finding["remediation_status"] = "suggested"
+        finding["patch_kind"] = "llm_bounded_proposal"
         return finding
 
     # CASE 4: Category we do not have fix logic for at all (e.g. "Other (...)" from Bandit)
@@ -175,6 +183,7 @@ def generate_fix(finding: dict) -> dict:
     finding["fix_explanation"] = "This finding type is outside current automated fix coverage -- manual review recommended."
     finding["remediation_time"] = "Manual review required"
     finding["fix_source"] = "out_of_scope"
+    finding["remediation_status"] = "not_automatically_fixable"
     return finding
 
 

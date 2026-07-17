@@ -25,7 +25,9 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
   const [error, setError] = useState('')
   const [selectedFindingIds, setSelectedFindingIds] = useState([])
   const [allowUntested, setAllowUntested] = useState(false)
-  const fixableFindings = findings.filter((finding) => finding.fixed_code && finding.finding_id)
+  const fixableFindings = findings.filter((finding) => (
+    finding.fixed_code && finding.finding_id && ['suggested', 'validated_locally'].includes(finding.remediation_status || 'suggested')
+  ))
   const testsUnavailable = result?.validation_details?.some(
     (detail) => detail.status === 'tests_not_available'
   )

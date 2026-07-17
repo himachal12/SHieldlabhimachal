@@ -71,7 +71,7 @@ def deterministic_fix(finding: dict) -> dict | None:
 
 def _read_source_line(finding: dict) -> str | None:
     """Read the full statement line for narrowly supported transformations."""
-    path = finding.get("file_path")
+    path = finding.get("_scan_file_path") or finding.get("file_path")
     line_number = finding.get("line_number")
     if not path or not isinstance(line_number, int) or line_number < 1:
         return None
@@ -84,7 +84,7 @@ def _read_source_line(finding: dict) -> str | None:
 
 def _has_os_import(finding: dict) -> bool:
     """Only emit ``os.environ`` when the scanned module already imports os."""
-    path = finding.get("file_path")
+    path = finding.get("_scan_file_path") or finding.get("file_path")
     if not path:
         return False
     try:
