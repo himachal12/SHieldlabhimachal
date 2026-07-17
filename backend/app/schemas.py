@@ -200,6 +200,7 @@ class PRResult(BaseModel):
     branch_name: str = ""
     fixes_applied: int = 0
     fixes_skipped: int = 0
+    remediation_status: str = "not_created"  # complete, partial, or not_created
     applied_details: List[dict] = []
     skipped_details: List[dict] = []
     validation_details: List[dict] = []
