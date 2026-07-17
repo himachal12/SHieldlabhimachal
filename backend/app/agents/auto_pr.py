@@ -39,6 +39,133 @@ from app.utils.logger import get_logger
 logger = get_logger("auto_pr")
 
 
+def _remediation_status(applied_count: int, skipped_count: int) -> str:
+    """Describe whether a requested remediation was complete or partial."""
+    if applied_count == 0:
+        return "not_created"
+    return "complete" if skipped_count == 0 else "partial"
+
+
+def _calls_in_tree(tree: ast.AST, name: str) -> list[ast.Call]:
+    """Return calls whose final function/attribute name matches ``name``."""
+    calls = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id == name:
+                calls.append(node)
+            elif isinstance(node.func, ast.Attribute) and node.func.attr == name:
+                calls.append(node)
+    return calls
+
+
+def _validate_vulnerability_fix(vuln_type: str, candidate: str) -> tuple[bool, dict]:
+    """Apply conservative, deterministic security checks for generated fixes.
+
+    Syntax validity alone cannot establish that an AI patch fixes the security
+    issue. These guards cover the patch categories for which an unsafe pattern
+    is unambiguous. A patch which cannot satisfy a guard is kept out of the PR
+    and left for manual review.
+    """
+    checks = {}
+    try:
+        tree = ast.parse(candidate)
+    except SyntaxError:
+        # The caller records the more useful syntax error separately.
+        return True, {"status": "not_run", "checks": checks, "reason": "Security checks deferred to syntax validation."}
+
+    source_lower = candidate.lower()
+    if vuln_type == "SQL Injection":
+        query_execute_calls = [
+            call for call in _calls_in_tree(tree, "execute")
+            if call.args and isinstance(call.args[0], ast.Name) and call.args[0].id == "query"
+        ]
+        # A parameterized query must pass the parameter tuple/list to execute.
+        if any(len(call.args) < 2 for call in query_execute_calls):
+            checks["parameterized_query"] = "failed"
+            return False, {
+                "status": "rejected_security_regression",
+                "checks": checks,
+                "reason": "SQL patch executes a query without bound parameters.",
+            }
+        checks["parameterized_query"] = "passed"
+
+    elif vuln_type == "Weak JWT Implementation":
+        if re.search(r"verify_signature\s*[\"']?\s*:\s*false|verify\s*=\s*false", source_lower):
+            checks["jwt_signature_verification"] = "failed"
+            return False, {
+                "status": "rejected_security_regression",
+                "checks": checks,
+                "reason": "JWT patch still disables signature verification.",
+            }
+        decode_calls = _calls_in_tree(tree, "decode")
+        jwt_decodes = [call for call in decode_calls if isinstance(call.func, ast.Attribute) and call.func.attr == "decode"]
+        if jwt_decodes and not any(any(keyword.arg == "algorithms" for keyword in call.keywords) for call in jwt_decodes):
+            checks["jwt_allowed_algorithms"] = "failed"
+            return False, {
+                "status": "rejected_security_regression",
+                "checks": checks,
+                "reason": "JWT patch does not explicitly restrict allowed algorithms.",
+            }
+        checks["jwt_signature_verification"] = "passed"
+        checks["jwt_allowed_algorithms"] = "passed"
+
+    elif vuln_type == "Unvalidated Redirects":
+        unsafe_redirect = re.search(r"redirect\(\s*request\.(args|form|values)\.get\(", candidate)
+        if unsafe_redirect:
+            checks["redirect_validation"] = "failed"
+            return False, {
+                "status": "rejected_security_regression",
+                "checks": checks,
+                "reason": "Redirect patch still passes request input directly to redirect().",
+            }
+        checks["redirect_validation"] = "passed"
+
+    elif vuln_type == "Command Injection":
+        run_calls = _calls_in_tree(tree, "run")
+        for call in run_calls:
+            if any(keyword.arg == "shell" and isinstance(keyword.value, ast.Constant) and keyword.value.value is True for keyword in call.keywords):
+                checks["shell_disabled"] = "failed"
+                return False, {
+                    "status": "rejected_security_regression",
+                    "checks": checks,
+                    "reason": "Command patch still enables shell=True.",
+                }
+        if ".stdout" in candidate and run_calls and not any(
+            any(keyword.arg in {"capture_output", "stdout"} for keyword in call.keywords)
+            for call in run_calls
+        ):
+            checks["subprocess_output"] = "failed"
+            return False, {
+                "status": "rejected_runtime_risk",
+                "checks": checks,
+                "reason": "Command patch reads subprocess stdout without capturing it.",
+            }
+        checks["shell_disabled"] = "passed"
+        checks["subprocess_output"] = "passed"
+
+    elif vuln_type == "Insecure Deserialization":
+        if re.search(r"\bpickle\.(loads|load)\s*\(", candidate):
+            checks["unsafe_deserialization"] = "failed"
+            return False, {
+                "status": "rejected_security_regression",
+                "checks": checks,
+                "reason": "Patch still deserializes untrusted input with pickle.",
+            }
+        checks["unsafe_deserialization"] = "passed"
+
+    elif vuln_type == "Weak Cryptography":
+        if re.search(r"hashlib\.(md5|sha1)\s*\(", source_lower):
+            checks["weak_hash_removed"] = "failed"
+            return False, {
+                "status": "rejected_security_regression",
+                "checks": checks,
+                "reason": "Patch still uses MD5 or SHA-1.",
+            }
+        checks["weak_hash_removed"] = "passed"
+
+    return True, {"status": "security_checks_passed", "checks": checks, "reason": "Category-specific security checks passed."}
+
+
 # ────────────────────────────────────────────────
 # ELIGIBILITY FILTER
 # ────────────────────────────────────────────────
@@ -175,6 +302,54 @@ def _validate_python_patch(file_path: str, original: str, candidate: str) -> tup
         "status": "validated",
         "checks": checks,
         "reason": "AST parsing and Python compilation passed.",
+    }
+
+
+def _run_project_tests(repo_dir: str) -> tuple[bool, dict]:
+    """Run an existing Python test suite in the fresh checkout when present.
+
+    We never invent or install dependencies in a customer's repository. A
+    patch that cannot be tested is not safe for one-click application, and an
+    existing suite that fails likewise blocks the candidate from being pushed.
+    """
+    has_tests = any(
+        name.startswith("test_") and name.endswith(".py")
+        for _, _, files in os.walk(repo_dir)
+        for name in files
+    )
+    if not has_tests:
+        return False, {
+            "status": "rejected_test_validation_unavailable",
+            "checks": {"project_tests": "not_available"},
+            "reason": "No Python test suite found; Auto PR will not push an untested security patch.",
+        }
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, {
+            "status": "rejected_test_validation_error",
+            "checks": {"project_tests": "failed"},
+            "reason": f"Could not run repository tests: {exc}",
+        }
+
+    if result.returncode != 0:
+        output = (result.stdout + "\n" + result.stderr).strip().replace("\n", " ")
+        return False, {
+            "status": "rejected_test_failure",
+            "checks": {"project_tests": "failed"},
+            "reason": f"Repository tests failed: {output[:500]}",
+        }
+    return True, {
+        "status": "tests_passed",
+        "checks": {"project_tests": "passed"},
+        "reason": "Repository test suite passed.",
     }
 
 
@@ -484,6 +659,20 @@ def create_fix_pr(
                         local_path, content, candidate
                     )
 
+                if is_valid:
+                    security_valid, security_validation = _validate_vulnerability_fix(
+                        finding.get("vuln_type", ""), candidate
+                    )
+                    validation["checks"].update(security_validation["checks"])
+                    if not security_valid:
+                        is_valid = False
+                        validation = security_validation
+                        # _validate_python_patch writes a successful candidate to
+                        # disk for py_compile. Do not let a rejected candidate
+                        # become the base for a later finding in this file.
+                        with open(local_path, "w", encoding="utf-8") as handle:
+                            handle.write(content)
+
                 validation_details.append({"file": relative_path, **validation})
                 if not is_valid:
                     skipped_fixes.append({
@@ -538,6 +727,26 @@ def create_fix_pr(
                         "Rejected generated fixes in %s: %s",
                         relative_path,
                         validation["reason"],
+                    )
+                    continue
+
+                tests_valid, test_validation = _run_project_tests(temp_dir)
+                validation_details.append({"file": relative_path, **test_validation})
+                if not tests_valid:
+                    with open(local_path, "w", encoding="utf-8") as handle:
+                        handle.write(original_content)
+                    for fix in file_applied_fixes:
+                        skipped_fixes.append({
+                            "vuln_type": fix["vuln_type"],
+                            "file": relative_path,
+                            "line": fix.get("line"),
+                            "status": test_validation["status"],
+                            "reason": test_validation["reason"],
+                            "checks": test_validation["checks"],
+                        })
+                    logger.warning(
+                        "Rejected generated fixes in %s because tests failed: %s",
+                        relative_path, test_validation["reason"],
                     )
                     continue
 
@@ -638,6 +847,7 @@ def create_fix_pr(
             "branch_name": branch_name,
             "fixes_applied": len(applied_fixes),
             "fixes_skipped": len(skipped_fixes),
+            "remediation_status": _remediation_status(len(applied_fixes), len(skipped_fixes)),
             "applied_details": applied_fixes,
             "skipped_details": skipped_fixes,
             "validation_details": validation_details,
@@ -651,6 +861,7 @@ def create_fix_pr(
                 "branch_name": branch_name,
                 "fixes_applied": len(applied_fixes),
                 "fixes_skipped": len(skipped_fixes),
+                "remediation_status": _remediation_status(len(applied_fixes), len(skipped_fixes)),
                 "applied_details": applied_fixes,
                 "skipped_details": skipped_fixes,
                 "validation_details": validation_details,

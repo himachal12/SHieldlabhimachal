@@ -116,6 +116,12 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
               </span>
             </div>
 
+            {result.remediation_status === 'partial' && (
+              <p className="mb-3 rounded-lg border border-yellow-400/30 bg-yellow-400/10 px-3 py-2 text-xs text-yellow-100">
+                Partial remediation: some requested fixes were safely skipped. Review the remaining findings before merging.
+              </p>
+            )}
+
             {/* PR Link */}
             <a
               href={result.pr_url}
@@ -159,7 +165,10 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
               </div>
             )}
 
-            <ValidationDetails details={result.validation_details} />
+              <ValidationDetails details={result.validation_details} />
+              <p className="mt-3 text-xs text-slate-500">
+                “Validated” means the recorded checks passed. ShieldLabs does not push one-click security patches when repository tests are unavailable or failing.
+              </p>
           </div>
         )}
 
