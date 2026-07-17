@@ -4,7 +4,9 @@ For each finding: either generate a real code fix via LLM (fixable categories)
 or attach a pre-written remediation guide (architectural categories).
 """
 
+import ast
 import json
+from pathlib import Path
 from app.utils.llm import ollama_call
 from app.utils.logger import get_logger
 from app.agents.fix_templates import get_template, is_fixable
@@ -12,6 +14,55 @@ from app.agents.remediation_guides import get_remediation_guide
 from app.agents.deterministic_fixes import deterministic_fix
 
 logger = get_logger("fix_generation")
+
+PATCH_SYSTEM_PROMPT = """You are a security patch generator, not a general coding assistant.
+Return only a complete JSON object matching the requested schema. Preserve the
+existing function behavior and patch boundary. Do not add dependencies. Do not
+add imports unless they are standard-library imports explicitly required by the
+patch. Do not replace a partial expression with a multiline block. If a safe
+patch requires broader context, multiple unrelated statements, a data migration,
+or an unverified behavioral change, return manual_review_required=true and an
+empty fixed_code. Before responding, verify syntax, indentation, identifiers,
+imports, and SQL placeholder/parameter consistency."""
+
+
+def _source_context(finding: dict) -> str:
+    """Return bounded file context while the pipeline checkout still exists."""
+    path = finding.get("file_path")
+    if not path:
+        return "No source file context is available."
+
+    try:
+        source = Path(path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return "No source file context is available."
+
+    imports = []
+    function_source = ""
+    line_number = finding.get("line_number")
+    try:
+        tree = ast.parse(source, filename=path)
+        imports = [
+            ast.get_source_segment(source, node)
+            for node in tree.body
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+        ]
+        if isinstance(line_number, int):
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    end = getattr(node, "end_lineno", node.lineno)
+                    if node.lineno <= line_number <= end:
+                        function_source = ast.get_source_segment(source, node) or ""
+                        break
+    except SyntaxError:
+        pass
+
+    return (
+        f"FILE: {path}\n"
+        f"LINE: {line_number or 'unknown'}\n"
+        f"FILE IMPORTS:\n{' '.join(imports) or '(none)'}\n"
+        f"ENCLOSING FUNCTION:\n{function_source or '(not available)'}"
+    )
 
 
 def _parse_llm_fix_response(response: str) -> dict | None:
@@ -88,8 +139,14 @@ def generate_fix(finding: dict) -> dict:
             return finding
 
         template = get_template(vuln_type)
-        prompt = template.format(code=code)
-        response = ollama_call(prompt)
+        prompt = (
+            template.format(code=code)
+            + "\n\nSOURCE CONTEXT (read-only; do not modify outside the exact vulnerable code):\n"
+            + _source_context(finding)
+            + "\n\nIf no safe direct replacement is possible, return the required JSON "
+              "with fixed_code as an empty string and explain why manual review is required."
+        )
+        response = ollama_call(prompt, system_prompt=PATCH_SYSTEM_PROMPT)
 
         parsed = _parse_llm_fix_response(response)
         if parsed is None:
@@ -98,6 +155,13 @@ def generate_fix(finding: dict) -> dict:
             finding["fix_explanation"] = "Automated fix generation failed for this finding -- manual review recommended."
             finding["remediation_time"] = "Manual review required"
             finding["fix_source"] = "generation_failed"
+            return finding
+
+        if not parsed["fixed_code"].strip():
+            finding["fixed_code"] = None
+            finding["fix_explanation"] = parsed["why_fix_works"]
+            finding["remediation_time"] = "Manual review required"
+            finding["fix_source"] = "manual_review_required"
             return finding
 
         finding["fixed_code"] = parsed["fixed_code"]

@@ -26,6 +26,7 @@ Key design decisions:
 """
 
 import ast
+import hashlib
 import os
 import re
 import subprocess
@@ -81,7 +82,31 @@ def _validate_vulnerability_fix(
         return True, {"status": "not_run", "checks": checks, "reason": "Security checks deferred to syntax validation."}
 
     source_lower = scope.lower()
-    if vuln_type == "SQL Injection":
+    if vuln_type == "Hardcoded Secrets":
+        assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)]
+        if any(
+            isinstance(value := assignment.value, ast.Constant)
+            and isinstance(value.value, str)
+            and value.value
+            for assignment in assignments
+        ):
+            checks["secret_literal_removed"] = "failed"
+            return False, {
+                "status": "rejected_security_regression",
+                "checks": checks,
+                "reason": "Secret patch still contains a string literal assignment.",
+            }
+        if "os.environ" not in scope:
+            checks["secret_environment_lookup"] = "failed"
+            return False, {
+                "status": "rejected_security_regression",
+                "checks": checks,
+                "reason": "Secret patch does not read the value from the process environment.",
+            }
+        checks["secret_literal_removed"] = "passed"
+        checks["secret_environment_lookup"] = "passed"
+
+    elif vuln_type == "SQL Injection":
         query_execute_calls = [
             call for call in _calls_in_tree(tree, "execute")
             if call.args and isinstance(call.args[0], ast.Name) and call.args[0].id == "query"
@@ -171,6 +196,54 @@ def _validate_vulnerability_fix(
         checks["weak_hash_removed"] = "passed"
 
     return True, {"status": "security_checks_passed", "checks": checks, "reason": "Category-specific security checks passed."}
+
+
+def _validate_post_apply_finding(finding: dict, candidate: str) -> tuple[bool, dict]:
+    """Prove the complete candidate no longer contains the original issue."""
+    vulnerable_code = (finding.get("vulnerable_code") or "").strip()
+    if vulnerable_code and vulnerable_code in candidate:
+        return False, {
+            "status": "rejected_post_apply_regression",
+            "checks": {"original_pattern_removed": "failed"},
+            "reason": "The original vulnerable source is still present after patch application.",
+        }
+
+    if finding.get("vuln_type") != "Hardcoded Secrets":
+        return True, {
+            "status": "post_apply_validated",
+            "checks": {"original_pattern_removed": "passed"},
+            "reason": "The original vulnerable source is absent from the candidate file.",
+        }
+
+    try:
+        tree = ast.parse(candidate)
+    except SyntaxError:
+        return False, {
+            "status": "rejected_post_apply_regression",
+            "checks": {"secret_assignment_unique": "failed"},
+            "reason": "Could not parse candidate while validating secret replacement.",
+        }
+
+    target_name = vulnerable_code.split("=", 1)[0].strip()
+    assignments = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == target_name for target in node.targets)
+    ]
+    if len(assignments) != 1:
+        return False, {
+            "status": "rejected_post_apply_regression",
+            "checks": {"secret_assignment_unique": "failed"},
+            "reason": f"Expected one assignment for {target_name}; found {len(assignments)}.",
+        }
+    return True, {
+        "status": "post_apply_validated",
+        "checks": {
+            "original_pattern_removed": "passed",
+            "secret_assignment_unique": "passed",
+        },
+        "reason": "The secret literal was removed and the replacement assignment is unique.",
+    }
 
 
 def _security_scope(candidate: str, fixed_code: str) -> str:
@@ -576,6 +649,11 @@ def create_fix_pr(
                 continue
 
             original = Path(local_path).read_text(encoding="utf-8", errors="ignore")
+            expected_hash = next((f.get("source_file_hash") for f in file_findings if f.get("source_file_hash")), None)
+            if expected_hash and hashlib.sha256(Path(local_path).read_bytes()).hexdigest() != expected_hash:
+                for finding in file_findings:
+                    skipped_fixes.append(_skip(finding, relative_path, "rejected_stale_source", "Repository file changed since the scan; rerun the scan before applying fixes."))
+                continue
             content = original
             file_fixes = []
             for finding in file_findings:
@@ -604,6 +682,11 @@ def create_fix_pr(
                     validation["checks"].update(security["checks"])
                     if not valid:
                         validation = security
+                if valid:
+                    valid, post_apply = _validate_post_apply_finding(finding, candidate)
+                    validation["checks"].update(post_apply["checks"])
+                    if not valid:
+                        validation = post_apply
                 validation_details.append({"file": relative_path, **validation})
                 if not valid:
                     Path(local_path).write_text(content, encoding="utf-8")

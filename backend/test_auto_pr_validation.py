@@ -22,6 +22,7 @@ from app.agents import auto_pr
 from app.agents.auto_pr import (
     _build_pr_description,
     _replace_with_context,
+    _validate_post_apply_finding,
     _run_project_tests,
     _validate_vulnerability_fix,
     _validate_python_patch,
@@ -44,6 +45,53 @@ def test_valid_python_patch_is_compiled(tmp_path):
         "py_compile": "passed",
     }
     assert source_file.read_text(encoding="utf-8") == candidate
+
+
+def test_secret_replacement_removes_literal_without_creating_duplicate_assignment(tmp_path):
+    source_file = tmp_path / "settings.py"
+    original = 'SECRET_KEY = "exposed"\n'
+    source_file.write_text(original, encoding="utf-8")
+
+    candidate, error = _replace_with_context(
+        original,
+        'SECRET_KEY = "exposed"',
+        'import os\nSECRET_KEY = os.environ["SECRET_KEY"]',
+    )
+    assert error is None
+    assert candidate == 'import os\nSECRET_KEY = os.environ["SECRET_KEY"]\n'
+    assert candidate.count("SECRET_KEY =") == 1
+
+    is_valid, detail = _validate_python_patch(str(source_file), original, candidate)
+    assert is_valid is True
+    assert detail["status"] == "validated"
+
+
+def test_post_apply_secret_validation_rejects_duplicate_assignment():
+    finding = {
+        "vuln_type": "Hardcoded Secrets",
+        "vulnerable_code": 'SECRET_KEY = "exposed"',
+    }
+    valid, detail = _validate_post_apply_finding(
+        finding,
+        'SECRET_KEY = "exposed"\nSECRET_KEY = os.environ["SECRET_KEY"]\n',
+    )
+
+    assert valid is False
+    assert detail["status"] == "rejected_post_apply_regression"
+
+
+def test_post_apply_secret_validation_accepts_single_environment_assignment():
+    finding = {
+        "vuln_type": "Hardcoded Secrets",
+        "vulnerable_code": 'SECRET_KEY = "exposed"',
+    }
+    valid, detail = _validate_post_apply_finding(
+        finding,
+        'SECRET_KEY = os.environ["SECRET_KEY"]\n',
+    )
+
+    assert valid is True
+    assert detail["checks"]["secret_assignment_unique"] == "passed"
 
 
 def test_invalid_python_patch_is_rejected_before_push(tmp_path):

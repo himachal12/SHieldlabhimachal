@@ -4,7 +4,7 @@ SQLite database for ShieldLabs
 """
 
 import os
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean, Float
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean, Float, inspect, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import datetime
@@ -108,6 +108,9 @@ class Finding(Base):
     fixed_code = Column(Text, nullable=True)  # AI-generated fix
     fix_explanation = Column(Text, nullable=True)  # Why the fix works
     remediation_time = Column(String, nullable=True)  # "30 minutes", "1 hour", etc.
+    fix_source = Column(String, nullable=True)  # deterministic, llm_generated, static_guide
+    remediation_status = Column(String, default="manual_review_required")
+    source_file_hash = Column(String, nullable=True)
     
     # Confidence & filtering
     confidence = Column(Float, default=1.0)  # 0.0 - 1.0 (how confident are we?)
@@ -181,6 +184,19 @@ def init_db():
     Run this once at startup
     """
     Base.metadata.create_all(bind=engine)
+    # Lightweight SQLite migration for installations created before finding
+    # remediation metadata existed. New databases get these via create_all.
+    if "sqlite" in DATABASE_URL:
+        columns = {column["name"] for column in inspect(engine).get_columns("findings")}
+        migrations = {
+            "fix_source": "ALTER TABLE findings ADD COLUMN fix_source VARCHAR",
+            "remediation_status": "ALTER TABLE findings ADD COLUMN remediation_status VARCHAR DEFAULT 'manual_review_required'",
+            "source_file_hash": "ALTER TABLE findings ADD COLUMN source_file_hash VARCHAR",
+        }
+        with engine.begin() as connection:
+            for name, statement in migrations.items():
+                if name not in columns:
+                    connection.execute(text(statement))
     print("✅ Database initialized")
 
 

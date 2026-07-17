@@ -26,7 +26,8 @@ const getLocation = (finding) => {
 export default function FindingCard({ finding }) {
   const [expanded, setExpanded] = useState(false)
   const isCodeFinding = Boolean(finding.file_path)
-  const hasFix = Boolean(finding.fixed_code)
+  const hasSuggestion = Boolean(finding.fixed_code)
+  const remediationStatus = finding.remediation_status || (hasSuggestion ? 'suggested' : 'manual_review_required')
 
   return (
     <div className="finding-card mb-3 overflow-hidden">
@@ -49,10 +50,15 @@ export default function FindingCard({ finding }) {
                     Chain
                   </span>
                 )}
-                {hasFix && (
+                {hasSuggestion && (
                   <span className="inline-flex items-center gap-1 rounded-full border border-green-400/25 bg-green-500/10 px-2 py-0.5 text-xs font-bold text-green-200">
                     <Wrench size={10} />
-                    AI fix
+                    {remediationStatus === 'validated_locally' ? 'Validated fix' : 'Suggested fix'}
+                  </span>
+                )}
+                {remediationStatus === 'manual_review_required' && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/25 bg-amber-500/10 px-2 py-0.5 text-xs font-bold text-amber-100">
+                    Manual review
                   </span>
                 )}
               </div>

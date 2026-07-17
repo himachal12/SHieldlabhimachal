@@ -308,6 +308,9 @@ async def create_fix_pr(
             "vulnerable_code": f.vulnerable_code,
             "fixed_code": f.fixed_code,
             "fix_explanation": f.fix_explanation,
+            "fix_source": f.fix_source,
+            "remediation_status": f.remediation_status,
+            "source_file_hash": f.source_file_hash,
             "is_false_positive": f.is_false_positive,
             "source": "bandit"  # default for code findings
         })

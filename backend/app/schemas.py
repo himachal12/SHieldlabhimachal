@@ -273,6 +273,9 @@ class FindingSchema(BaseModel):
     fixed_code: Optional[str] = None
     fix_explanation: Optional[str] = None
     remediation_time: Optional[str] = None
+    fix_source: Optional[str] = None
+    remediation_status: str = "manual_review_required"
+    source_file_hash: Optional[str] = None
     confidence: float = Field(1.0, ge=0.0, le=1.0)
     is_false_positive: bool = False
 

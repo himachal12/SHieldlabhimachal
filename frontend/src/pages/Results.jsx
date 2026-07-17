@@ -197,7 +197,9 @@ export default function Results() {
   }, [findings])
 
   const riskLevel = results ? getRiskLevel(results) : 'LOW'
-  const fixableCount = findings.filter((finding) => finding.fixed_code).length
+  const suggestedFixCount = findings.filter((finding) => (
+    finding.fixed_code && (!finding.remediation_status || finding.remediation_status === 'suggested')
+  )).length
   const chainFindingCount = findings.filter((finding) => finding.is_cross_domain).length
   const hasAttackChains = Boolean(results?.attack_chains?.length)
 
@@ -309,8 +311,8 @@ export default function Results() {
                 <p className="text-2xl font-black text-white">{results.total_findings}</p>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Fixes</p>
-                <p className="text-2xl font-black text-green-300">{fixableCount}</p>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Suggestions</p>
+                <p className="text-2xl font-black text-green-300">{suggestedFixCount}</p>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Chains</p>
@@ -328,8 +330,8 @@ export default function Results() {
             </div>
             <div className="space-y-3 text-sm">
               <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2">
-                <span className="text-slate-400">AI fixes returned</span>
-                <span className="font-bold text-green-300">{fixableCount}</span>
+                <span className="text-slate-400">Suggested patches</span>
+                <span className="font-bold text-green-300">{suggestedFixCount}</span>
               </div>
               <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2">
                 <span className="text-slate-400">Chain-linked findings</span>
@@ -368,12 +370,14 @@ export default function Results() {
         </div>
 
         {results.scan_type !== 'web' && (
-          <AutoPRPanel
-            scanId={scanId}
-            repoUrl={results.repo_url}
-            scanType={results.scan_type}
-            findings={findings}
-          />
+          <AutoPRPanelErrorBoundary scanId={scanId}>
+            <AutoPRPanel
+              scanId={scanId}
+              repoUrl={results.repo_url}
+              scanType={results.scan_type}
+              findings={findings}
+            />
+          </AutoPRPanelErrorBoundary>
         )}
 
         {hasAttackChains && (
@@ -483,7 +487,7 @@ export default function Results() {
               className={`result-toggle ${showFixableOnly ? 'is-active' : ''}`}
             >
               <Wrench size={14} />
-              Has AI fix ({fixableCount})
+              Has suggestion ({suggestedFixCount})
             </button>
             <button
               onClick={() => setShowChainsOnly(!showChainsOnly)}

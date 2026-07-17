@@ -25,7 +25,11 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
   const [error, setError] = useState('')
   const [selectedFindingIds, setSelectedFindingIds] = useState([])
   const [allowUntested, setAllowUntested] = useState(false)
-  const fixableFindings = findings.filter((finding) => finding.fixed_code && finding.finding_id)
+  const fixableFindings = findings.filter((finding) => (
+    finding.fixed_code
+    && finding.finding_id
+    && (!finding.remediation_status || finding.remediation_status === 'suggested')
+  ))
   const testsUnavailable = result?.validation_details?.some(
     (detail) => detail.status === 'tests_not_available'
   )
@@ -124,6 +128,12 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
             {result.remediation_status === 'partial' && (
               <p className="mb-3 rounded-lg border border-yellow-400/30 bg-yellow-400/10 px-3 py-2 text-xs text-yellow-100">
                 Partial remediation: some requested fixes were safely skipped. Review the remaining findings before merging.
+              </p>
+            )}
+
+            {testsUnavailable && (
+              <p className="mb-3 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
+                This is a manual-review PR: no runnable Python test suite was available.
               </p>
             )}
 

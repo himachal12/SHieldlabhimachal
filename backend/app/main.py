@@ -15,6 +15,7 @@ load_dotenv()
 
 # Import API routes
 from app.api.routes import router
+from app.database import init_db
 
 # Configure logging
 logging.basicConfig(
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"🔧 Debug mode: {DEBUG}")
     logger.info(f"🧠 Ollama API: {os.getenv('OLLAMA_BASE_URL')}")
     logger.info(f"🚀 Groq API: {'Configured' if os.getenv('GROQ_API_KEY') else 'NOT CONFIGURED'}")
+    init_db()
     
     yield  # App runs here
     
