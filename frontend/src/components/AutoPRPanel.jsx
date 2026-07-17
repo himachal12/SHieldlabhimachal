@@ -125,12 +125,6 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
               </p>
             )}
 
-            {testsUnavailable && (
-              <p className="mb-3 rounded-lg border border-blue-400/30 bg-blue-400/10 px-3 py-2 text-xs text-blue-100">
-                Repository tests were not available. These patches passed syntax and category-specific safety checks, but still require normal code review before merging.
-              </p>
-            )}
-
             {/* PR Link */}
             <a
               href={result.pr_url}
@@ -176,7 +170,7 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType, findings = [] }
 
               <ValidationDetails details={result.validation_details} />
               <p className="mt-3 text-xs text-slate-500">
-                “Validated” means the recorded checks passed. Failed repository tests block a patch; unavailable tests are shown clearly for reviewer attention.
+                “Validated” means the recorded checks passed. ShieldLabs does not push one-click security patches when repository tests are unavailable or failing.
               </p>
           </div>
         )}

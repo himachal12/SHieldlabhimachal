@@ -22,7 +22,6 @@ from app.agents import auto_pr
 from app.agents.auto_pr import (
     _build_pr_description,
     _replace_with_context,
-    _run_project_tests,
     _validate_vulnerability_fix,
     _validate_python_patch,
 )
@@ -151,14 +150,6 @@ def test_safe_parameterized_sql_patch_passes_category_check():
 
     assert valid is True
     assert detail["checks"]["parameterized_query"] == "passed"
-
-
-def test_missing_repository_tests_are_disclosed_but_do_not_block_safe_patch(tmp_path):
-    valid, detail = _run_project_tests(str(tmp_path))
-
-    assert valid is True
-    assert detail["status"] == "tests_not_available"
-    assert detail["checks"]["project_tests"] == "not_available"
 
 def test_pr_description_reports_validation_and_skips():
     description = _build_pr_description(

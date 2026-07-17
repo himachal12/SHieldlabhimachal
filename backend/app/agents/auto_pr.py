@@ -58,23 +58,22 @@ def _calls_in_tree(tree: ast.AST, name: str) -> list[ast.Call]:
     return calls
 
 
-def _validate_vulnerability_fix(vuln_type: str, patch_code: str) -> tuple[bool, dict]:
+def _validate_vulnerability_fix(vuln_type: str, candidate: str) -> tuple[bool, dict]:
     """Apply conservative, deterministic security checks for generated fixes.
 
     Syntax validity alone cannot establish that an AI patch fixes the security
-    issue. These guards inspect only the generated replacement for the current
-    finding, so one remaining finding elsewhere in the same file cannot reject
-    an otherwise safe patch. A patch which cannot satisfy a guard is kept out
-    of the PR and left for manual review.
+    issue. These guards cover the patch categories for which an unsafe pattern
+    is unambiguous. A patch which cannot satisfy a guard is kept out of the PR
+    and left for manual review.
     """
     checks = {}
     try:
-        tree = ast.parse(patch_code)
+        tree = ast.parse(candidate)
     except SyntaxError:
         # The caller records the more useful syntax error separately.
         return True, {"status": "not_run", "checks": checks, "reason": "Security checks deferred to syntax validation."}
 
-    source_lower = patch_code.lower()
+    source_lower = candidate.lower()
     if vuln_type == "SQL Injection":
         query_execute_calls = [
             call for call in _calls_in_tree(tree, "execute")
@@ -111,7 +110,7 @@ def _validate_vulnerability_fix(vuln_type: str, patch_code: str) -> tuple[bool, 
         checks["jwt_allowed_algorithms"] = "passed"
 
     elif vuln_type == "Unvalidated Redirects":
-        unsafe_redirect = re.search(r"redirect\(\s*request\.(args|form|values)\.get\(", patch_code)
+        unsafe_redirect = re.search(r"redirect\(\s*request\.(args|form|values)\.get\(", candidate)
         if unsafe_redirect:
             checks["redirect_validation"] = "failed"
             return False, {
@@ -131,7 +130,7 @@ def _validate_vulnerability_fix(vuln_type: str, patch_code: str) -> tuple[bool, 
                     "checks": checks,
                     "reason": "Command patch still enables shell=True.",
                 }
-        if ".stdout" in patch_code and run_calls and not any(
+        if ".stdout" in candidate and run_calls and not any(
             any(keyword.arg in {"capture_output", "stdout"} for keyword in call.keywords)
             for call in run_calls
         ):
@@ -145,7 +144,7 @@ def _validate_vulnerability_fix(vuln_type: str, patch_code: str) -> tuple[bool, 
         checks["subprocess_output"] = "passed"
 
     elif vuln_type == "Insecure Deserialization":
-        if re.search(r"\bpickle\.(loads|load)\s*\(", patch_code):
+        if re.search(r"\bpickle\.(loads|load)\s*\(", candidate):
             checks["unsafe_deserialization"] = "failed"
             return False, {
                 "status": "rejected_security_regression",
@@ -310,10 +309,8 @@ def _run_project_tests(repo_dir: str) -> tuple[bool, dict]:
     """Run an existing Python test suite in the fresh checkout when present.
 
     We never invent or install dependencies in a customer's repository. A
-    missing test suite is disclosed to the developer, while an existing suite
-    that fails blocks the candidate from being pushed. This lets supported,
-    independently syntax- and security-validated fixes help small repositories
-    that do not yet have tests.
+    patch that cannot be tested is not safe for one-click application, and an
+    existing suite that fails likewise blocks the candidate from being pushed.
     """
     has_tests = any(
         name.startswith("test_") and name.endswith(".py")
@@ -321,10 +318,10 @@ def _run_project_tests(repo_dir: str) -> tuple[bool, dict]:
         for name in files
     )
     if not has_tests:
-        return True, {
-            "status": "tests_not_available",
+        return False, {
+            "status": "rejected_test_validation_unavailable",
             "checks": {"project_tests": "not_available"},
-            "reason": "No Python test suite found; patch passed static and category-specific validation only.",
+            "reason": "No Python test suite found; Auto PR will not push an untested security patch.",
         }
 
     try:
@@ -664,7 +661,7 @@ def create_fix_pr(
 
                 if is_valid:
                     security_valid, security_validation = _validate_vulnerability_fix(
-                        finding.get("vuln_type", ""), fixed_code
+                        finding.get("vuln_type", ""), candidate
                     )
                     validation["checks"].update(security_validation["checks"])
                     if not security_valid:
