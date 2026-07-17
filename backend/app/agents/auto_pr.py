@@ -391,12 +391,13 @@ def create_fix_pr(
             original_content = content  # keep for comparison
             file_applied_fixes = []
 
-            # Apply each fix for this file
+            # Apply and validate each fix independently. One rejected fix must
+            # never discard another fix that already passed validation.
             for finding in file_findings:
-                vulnerable_code = finding.get("vulnerable_code", "").strip()
+                vulnerable_code = finding.get("vulnerable_code", "")
                 fixed_code = finding.get("fixed_code", "").strip()
 
-                if not vulnerable_code or not fixed_code:
+                if not vulnerable_code.strip() or not fixed_code:
                     skipped_fixes.append({
                         "vuln_type": finding.get("vuln_type"),
                         "file": relative_path,
@@ -405,10 +406,6 @@ def create_fix_pr(
                     })
                     continue
 
-                # ── Detect indentation of vulnerable code in context ──────
-                base_indent = _get_base_indent(vulnerable_code)
-
-                # ── Check if fix is a structural rewrite (not drop-in) ────
                 if _is_structural_rewrite(vulnerable_code, fixed_code):
                     skipped_fixes.append({
                         "vuln_type": finding.get("vuln_type"),
@@ -420,44 +417,87 @@ def create_fix_pr(
                             "replacement. Manual fix recommended."
                         )
                     })
-                    logger.warning(
-                        f"  Skipped (structural rewrite): "
-                        f"{finding.get('vuln_type')} in {relative_path}"
-                    )
                     continue
 
-                # ── Re-indent the fix to match surrounding code ───────────
-                indented_fix = _apply_indent(fixed_code, base_indent)
-
-                # ── Try exact match first ──────────────────────────────────
-                matched = False
-                if vulnerable_code in content:
-                    content = content.replace(vulnerable_code, indented_fix, 1)
-                    matched = True
-
-                # ── Try stripped match (handles minor whitespace differences) ──
-                elif vulnerable_code.strip() in content:
-                    content = content.replace(
-                        vulnerable_code.strip(), indented_fix.strip(), 1
+                candidate, replacement_error = _replace_with_context(
+                    content, vulnerable_code, fixed_code
+                )
+                if candidate is None:
+                    validation = {
+                        "status": "rejected_unsafe_patch_boundary",
+                        "checks": {},
+                        "reason": replacement_error,
+                    }
+                    is_valid = False
+                else:
+                    is_valid, validation = _validate_python_patch(
+                        local_path, content, candidate
                     )
-                    matched = True
 
                 if matched:
                     file_applied_fixes.append({
                         "vuln_type": finding.get("vuln_type"),
-                        "severity": finding.get("severity"),
-                        "cvss_score": finding.get("cvss_score"),
                         "file": relative_path,
                         "line": finding.get("line_number"),
                         "status": "pending_validation",
                     })
-                    logger.info(
-                        f"  Applied fix: {finding.get('vuln_type')} "
-                        f"in {relative_path}"
+                    logger.warning(
+                        "Rejected generated fix %s in %s: %s",
+                        finding.get("vuln_type"), relative_path, validation["reason"],
                     )
-                else:
+                    continue
+
+                content = candidate
+                file_applied_fixes.append({
+                    "vuln_type": finding.get("vuln_type"),
+                    "severity": finding.get("severity"),
+                    "cvss_score": finding.get("cvss_score"),
+                    "file": relative_path,
+                    "line": finding.get("line_number"),
+                    "status": "pending_push",
+                })
+                logger.info(
+                    "Validated staged fix: %s in %s",
+                    finding.get("vuln_type"), relative_path,
+                )
+
+            # Validate the complete candidate file before it can be pushed.
+            if content != original_content and relative_path.endswith(".py"):
+                is_valid, validation = _validate_python_patch(
+                    local_path, original_content, content
+                )
+                validation_details.append({"file": relative_path, **validation})
+                if not is_valid:
+                    # The validator writes the candidate before py_compile. Restore the
+                    # original source and reject every patch in this file as a unit.
+                    with open(local_path, "w", encoding="utf-8") as handle:
+                        handle.write(original_content)
+                    for fix in file_applied_fixes:
+                        skipped_fixes.append({
+                            "vuln_type": fix["vuln_type"],
+                            "file": relative_path,
+                            "line": fix.get("line"),
+                            "status": validation["status"],
+                            "reason": validation["reason"],
+                            "checks": validation["checks"],
+                        })
+                    logger.warning(
+                        "Rejected generated fixes in %s: %s",
+                        relative_path,
+                        validation["reason"],
+                    )
+                    continue
+
+            if content != original_content and not relative_path.endswith(".py"):
+                validation = {
+                    "status": "rejected_unsupported_file_type",
+                    "checks": {},
+                    "reason": "Only Python files can be syntax-validated for Auto PR.",
+                }
+                validation_details.append({"file": relative_path, **validation})
+                for fix in file_applied_fixes:
                     skipped_fixes.append({
-                        "vuln_type": finding.get("vuln_type"),
+                        "vuln_type": fix["vuln_type"],
                         "file": relative_path,
                         "status": "skipped_source_changed",
                         "reason": (
@@ -465,10 +505,7 @@ def create_fix_pr(
                             "File may have changed since scan was run."
                         )
                     })
-                    logger.warning(
-                        f"  Skipped: {finding.get('vuln_type')} — "
-                        f"exact match not found in {relative_path}"
-                    )
+                continue
 
             # Validate the complete candidate file before it can be pushed.
             if content != original_content and relative_path.endswith(".py"):
@@ -548,10 +585,14 @@ def create_fix_pr(
 
     # If nothing got applied, don't open an empty PR
     if not applied_fixes:
+        rejection_message = "No fixes could be applied. Review the validation details below."
+        if validation_details:
+            rejection_message = (
+                "No fixes were pushed because generated changes failed validation. "
+                "Review the validation details below."
+            )
         return _error_result(
-            "No fixes could be applied — all matches failed. "
-            "This usually means the code changed since the scan ran. "
-            "Try re-scanning the repository.",
+            rejection_message,
             extra={
                 "branch_name": branch_name,
                 "fixes_applied": 0,

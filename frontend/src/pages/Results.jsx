@@ -343,6 +343,7 @@ export default function Results() {
             scanId={scanId}
             repoUrl={results.repo_url}
             scanType={results.scan_type}
+            findings={findings}
           />
         )}
 

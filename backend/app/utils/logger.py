@@ -32,9 +32,11 @@ file_format = logging.Formatter(
 )
 file_handler.setFormatter(file_format)
 
-# Add handlers to logger
-logger.addHandler(console_handler)
-logger.addHandler(file_handler)
+# Add handlers once and stop propagation to the root logger configured by FastAPI.
+if not logger.handlers:
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+logger.propagate = False
 
 def get_logger(name):
     """Get logger instance"""

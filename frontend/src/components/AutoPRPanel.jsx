@@ -23,6 +23,16 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType }) {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
+  const [selectedFindingIds, setSelectedFindingIds] = useState([])
+  const fixableFindings = findings.filter((finding) => finding.fixed_code && finding.finding_id)
+
+  const toggleFinding = (findingId) => {
+    setSelectedFindingIds((selected) => (
+      selected.includes(findingId)
+        ? selected.filter((id) => id !== findingId)
+        : [...selected, findingId]
+    ))
+  }
 
   // Only show for scans that have code findings
   if (scanType === 'web') return null
@@ -48,7 +58,8 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType }) {
         body: JSON.stringify({
           scan_id: scanId,
           github_token: token.trim(),
-          repo_url: repoUrl
+          repo_url: repoUrl,
+          ...(selectedFindingIds.length > 0 ? { finding_ids: selectedFindingIds } : {})
         })
       })
 
@@ -196,6 +207,27 @@ export default function AutoPRPanel({ scanId, repoUrl, scanType }) {
                 . Your token is never stored — used once and discarded.
               </p>
             </div>
+
+            {fixableFindings.length > 0 && (
+              <div className="mb-3 rounded-lg border border-slate-700 bg-slate-800/50 p-3">
+                <p className="mb-2 text-xs font-medium text-slate-300">
+                  Optional: select specific fixes. Leave all unchecked to request every eligible fix.
+                </p>
+                <div className="max-h-36 space-y-1 overflow-y-auto text-xs text-slate-400">
+                  {fixableFindings.map((finding) => (
+                    <label key={finding.finding_id} className="flex cursor-pointer items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedFindingIds.includes(finding.finding_id)}
+                        onChange={() => toggleFinding(finding.finding_id)}
+                        className="mt-0.5"
+                      />
+                      <span>{finding.vuln_type} — {finding.file_path}:{finding.line_number}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Token input */}
             <div className="relative mb-3">
