@@ -222,10 +222,16 @@ async def get_results(scan_id: str, db: Session = Depends(get_db)):
                 finding_ids=c["finding_ids"],
                 finding_types=c["finding_types"],
                 severity=c["severity"],
-                attack_chain=c["attack_chain"],
-                time_to_exploit=c["time_to_exploit"],
-                impact=c["impact"],
-                reasoning=c["reasoning"]
+                attack_chain=c.get("attack_chain", []),
+                attack_steps=c.get("attack_steps", []),
+                evidence=c.get("evidence", []),
+                source_summary=c.get("source_summary", {}),
+                time_to_exploit=c.get("time_to_exploit", "unknown"),
+                impact=c.get("impact", ""),
+                reasoning=c.get("reasoning", ""),
+                confidence=c.get("confidence"),
+                priority_rationale=c.get("priority_rationale", ""),
+                recommended_fix_order=c.get("recommended_fix_order", []),
             ))
         except Exception as e:
             logger.warning(f"Could not serialize chain {c.get('chain_id')}: {e}")

@@ -174,6 +174,13 @@ class AttackChain(Base):
     description = Column(Text)  # How findings connect
     time_to_exploit = Column(String)  # "5 minutes", "2 hours", etc.
     impact = Column(Text)  # Business impact
+    evidence = Column(Text, nullable=True)  # JSON finding evidence snapshots
+    attack_steps = Column(Text, nullable=True)  # JSON structured attack steps
+    source_summary = Column(Text, nullable=True)  # JSON source/mode/location summary
+    confidence = Column(String, nullable=True)  # high, medium, low
+    priority_rationale = Column(Text, nullable=True)
+    recommended_fix_order = Column(Text, nullable=True)  # JSON ordered remediation actions
+    reasoning = Column(Text, nullable=True)
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -199,11 +206,21 @@ def init_db():
             "repository_relative_path": "VARCHAR", "repository_commit": "VARCHAR",
             "finding_rule_id": "VARCHAR", "patch_kind": "VARCHAR",
         }
+        required_attack_chain_columns = {
+            "evidence": "TEXT", "attack_steps": "TEXT", "source_summary": "TEXT",
+            "confidence": "VARCHAR", "priority_rationale": "TEXT",
+            "recommended_fix_order": "TEXT", "reasoning": "TEXT",
+        }
         with engine.begin() as connection:
             existing = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(findings)")}
             for name, sql_type in required_columns.items():
                 if name not in existing:
                     connection.exec_driver_sql(f"ALTER TABLE findings ADD COLUMN {name} {sql_type}")
+
+            existing_chains = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(attack_chains)")}
+            for name, sql_type in required_attack_chain_columns.items():
+                if name not in existing_chains:
+                    connection.exec_driver_sql(f"ALTER TABLE attack_chains ADD COLUMN {name} {sql_type}")
     print("✅ Database initialized")
 
 
