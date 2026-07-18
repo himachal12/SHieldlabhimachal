@@ -65,7 +65,7 @@ def test_unknown_secret_shape_remains_for_manual_or_llm_handling():
     }) is None
 
 
-def test_secret_without_an_existing_os_import_adds_a_safe_stdlib_import(tmp_path):
+def test_secret_without_an_existing_os_import_leaves_import_to_auto_pr(tmp_path):
     source = tmp_path / "app.py"
     source.write_text('API_KEY = "secret-value"\n', encoding="utf-8")
 
@@ -75,4 +75,47 @@ def test_secret_without_an_existing_os_import_adds_a_safe_stdlib_import(tmp_path
         "file_path": str(source),
     })
 
-    assert result["fixed_code"] == 'import os\nAPI_KEY = os.environ["API_KEY"]'
+    assert result["fixed_code"] == 'API_KEY = os.environ["API_KEY"]'
+
+
+def test_sql_query_assignment_and_execute_are_replaced_together(tmp_path):
+    source = tmp_path / "app.py"
+    source.write_text(
+        "def get_user(username):\n"
+        "    query = f\"SELECT * FROM users WHERE username = '{username}'\"\n"
+        "    cursor.execute(query)\n",
+        encoding="utf-8",
+    )
+
+    result = deterministic_fix({
+        "vuln_type": "SQL Injection",
+        "file_path": str(source),
+        "line_number": 2,
+        "vulnerable_code": "query = f\"SELECT * FROM users WHERE username = '{username}'\"",
+    })
+
+    assert result["vulnerable_code"] == (
+        'query = f"SELECT * FROM users WHERE username = \'{username}\'"\n'
+        "cursor.execute(query)"
+    )
+    assert result["fixed_code"] == (
+        'query = "SELECT * FROM users WHERE username = ?"\n'
+        "cursor.execute(query, (username,))"
+    )
+
+
+def test_sql_query_assignment_rejects_multiple_interpolations(tmp_path):
+    source = tmp_path / "app.py"
+    source.write_text(
+        "def get_user(username, status):\n"
+        "    query = f\"SELECT * FROM users WHERE username = '{username}' AND status = '{status}'\"\n"
+        "    cursor.execute(query)\n",
+        encoding="utf-8",
+    )
+
+    assert deterministic_fix({
+        "vuln_type": "SQL Injection",
+        "file_path": str(source),
+        "line_number": 2,
+        "vulnerable_code": "ignored",
+    }) is None
