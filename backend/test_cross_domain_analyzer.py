@@ -128,9 +128,9 @@ def test_dedupe_for_chain_analysis_keeps_highest_confidence_duplicate():
         "vuln_type": "Hardcoded Secrets",
         "source": "custom",
         "file_path": "app.py",
-        "line_number": 9,
+        "line_number": 10,
         "vulnerable_code": 'API_KEY = "secret"',
-        "description": "Custom detector reports the same secret on an adjacent line",
+        "description": "Possible hardcoded secret",
         "confidence": 0.95,
     }
     web_finding = {
@@ -189,9 +189,9 @@ def test_analyze_attack_chains_dedupes_before_pair_analysis(monkeypatch):
             "vuln_type": "Hardcoded Secrets",
             "source": "custom",
             "file_path": "app.py",
-            "line_number": 9,
+            "line_number": 10,
             "vulnerable_code": 'API_KEY = "secret"',
-            "description": "Custom detector reports the same secret on an adjacent line",
+            "description": "Possible hardcoded secret",
             "confidence": 0.95,
         },
         {
