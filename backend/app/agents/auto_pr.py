@@ -249,6 +249,30 @@ def _validate_full_file_regression(finding: dict, candidate: str) -> tuple[bool,
                   "reason": "Full-file regression checks passed."}
 
 
+
+def _validate_applied_finding_postconditions(finding: dict, candidate: str) -> tuple[bool, dict]:
+    """Final targeted per-finding checks before a file is staged."""
+    valid, detail = _validate_full_file_regression(finding, candidate)
+    if not valid:
+        return valid, detail
+    vuln_type = finding.get("vuln_type", "")
+    original = (finding.get("vulnerable_code") or "").strip()
+    checks = dict(detail.get("checks", {}))
+    if vuln_type == "SQL Injection" and re.search(r"\.execute\(\s*query\s*\)", candidate):
+        checks["sql_execute_bound_parameters"] = "failed"
+        return False, {"status": "rejected_security_regression", "checks": checks,
+                       "reason": "A SQL execute(query) call without bound parameters remains after patching."}
+    if vuln_type == "Unvalidated Redirects" and original:
+        line_number = finding.get("line_number")
+        bounds = _line_bounds_for_number(candidate, line_number)
+        if bounds and re.search(r"redirect\(\s*request\.(args|form|values)\.get\(", candidate[bounds[0]:bounds[1]]):
+            checks["redirect_patched_line_safe"] = "failed"
+            return False, {"status": "rejected_security_regression", "checks": checks,
+                           "reason": "The patched redirect line still redirects request input directly."}
+        checks["redirect_patched_line_safe"] = "passed"
+    return True, {"status": "post_validation_passed", "checks": checks,
+                  "reason": "Final per-finding postconditions passed."}
+
 def _security_scope(candidate: str, fixed_code: str) -> str:
     """Return the enclosing function for a uniquely inserted replacement.
 
@@ -522,53 +546,98 @@ def _run_project_tests(
     }
 
 
-def _replace_with_context(
-    content: str, vulnerable_code: str, fixed_code: str
-) -> tuple[str | None, str | None]:
-    """Build an indentation-preserving, exact-match replacement candidate.
+def _normalized_statement(code: str) -> str:
+    """Normalize whitespace for same-statement comparisons only."""
+    return re.sub(r"\s+", "", code.strip())
 
-    Auto-PR must never guess at a source location.  The vulnerable snippet must
-    occur exactly once, and a multi-line replacement must replace a complete
-    source statement (rather than, for example, just ``redirect(...)`` after a
-    ``return`` keyword).  The replacement is re-indented to match its source
-    line so multi-line LLM responses remain valid inside functions and blocks.
+
+def _line_bounds_for_number(content: str, line_number: int | None) -> tuple[int, int] | None:
+    """Return byte offsets for a trusted one-based physical source line."""
+    if not isinstance(line_number, int) or line_number < 1:
+        return None
+    start = 0
+    current = 1
+    for line in content.splitlines(keepends=True):
+        end = start + len(line)
+        if current == line_number:
+            return start, end - (1 if line.endswith("\n") else 0)
+        start = end
+        current += 1
+    return None
+
+
+def _replace_physical_line(
+    content: str, vulnerable_code: str, fixed_code: str, line_number: int | None
+) -> tuple[str | None, str | None]:
+    """Replace the reported physical line when exact snippet matching is stale."""
+    bounds = _line_bounds_for_number(content, line_number)
+    if bounds is None:
+        return None, "Vulnerable code pattern not found and no trusted line_number was provided. Manual review required."
+    line_start, line_end = bounds
+    physical_line = content[line_start:line_end]
+    normalized_line = _normalized_statement(physical_line)
+    normalized_vulnerable = _normalized_statement(vulnerable_code)
+    if not normalized_vulnerable or normalized_vulnerable not in normalized_line:
+        return None, "Reported line_number does not contain the vulnerable statement. Manual review required."
+
+    # The line_number is the disambiguator. If the same normalized statement is
+    # present on other physical lines, do not guess which location was intended.
+    matching_lines = [
+        index for index, line in enumerate(content.splitlines(), start=1)
+        if normalized_vulnerable in _normalized_statement(line)
+    ]
+    if matching_lines != [line_number]:
+        return None, "Vulnerable code appears on multiple lines; refusing ambiguous replacement."
+
+    indentation = re.match(r"[ \t]*", physical_line).group(0)
+    replacement = _apply_indent(fixed_code.strip(), indentation)
+    return content[:line_start] + replacement + content[line_end:], None
+
+
+def _replace_with_context(
+    content: str, vulnerable_code: str, fixed_code: str, line_number: int | None = None
+) -> tuple[str | None, str | None, str | None]:
+    """Build an indentation-preserving replacement candidate.
+
+    Exact matching remains the safest path. If scanner/LLM normalization changed
+    spacing or captured only part of a line, fall back only to the reported
+    physical line_number and replace that whole line.
     """
     if not vulnerable_code.strip():
-        return None, "Vulnerable code snippet is empty."
+        return None, "Vulnerable code snippet is empty.", None
 
     occurrences = content.count(vulnerable_code)
-    if occurrences == 0:
-        return None, "Vulnerable code pattern not found in current file. File may have changed since scan."
+    if occurrences == 1:
+        match_start = content.index(vulnerable_code)
+        match_end = match_start + len(vulnerable_code)
+        line_start = content.rfind("\n", 0, match_start) + 1
+        line_end = content.find("\n", match_end)
+        if line_end == -1:
+            line_end = len(content)
+
+        prefix = content[line_start:match_start]
+        suffix = content[match_end:line_end]
+        replacement_lines = [line for line in fixed_code.splitlines() if line.strip()]
+        if len(replacement_lines) > 1 and (prefix.strip() or suffix.strip()):
+            # If the scanner captured a partial expression but also supplied a
+            # trusted physical line, replace that whole line instead. Without a
+            # line_number this remains unsafe and must go to manual review.
+            candidate, error = _replace_physical_line(content, vulnerable_code, fixed_code, line_number)
+            if candidate is not None:
+                return candidate, None, "line_number_fallback"
+            return None, (
+                "Generated multi-line fix targets only part of a source statement. "
+                "Manual review required."
+            ), None
+        indentation = re.match(r"[ \t]*", content[line_start:]).group(0)
+        replacement = _apply_indent(fixed_code.strip(), indentation)
+        replace_start = line_start if not prefix.strip() else match_start
+        return content[:replace_start] + replacement + content[match_end:], None, "exact_match"
     if occurrences > 1:
-        return None, "Vulnerable code pattern appears multiple times; refusing ambiguous replacement."
+        return None, "Vulnerable code pattern appears multiple times; refusing ambiguous replacement.", None
 
-    match_start = content.index(vulnerable_code)
-    match_end = match_start + len(vulnerable_code)
-    line_start = content.rfind("\n", 0, match_start) + 1
-    line_end = content.find("\n", match_end)
-    if line_end == -1:
-        line_end = len(content)
-
-    prefix = content[line_start:match_start]
-    suffix = content[match_end:line_end]
-    replacement_lines = [line for line in fixed_code.splitlines() if line.strip()]
-
-    # A multi-line replacement can safely replace only an entire statement.
-    # Whitespace before a snippet is simply its block indentation; any other
-    # prefix/suffix means the scanner captured a partial expression.
-    if len(replacement_lines) > 1 and (prefix.strip() or suffix.strip()):
-        return None, (
-            "Generated multi-line fix targets only part of a source statement. "
-            "Manual review required."
-        )
-
-    indentation = re.match(r"[ \t]*", content[line_start:]).group(0)
-    replacement = _apply_indent(fixed_code.strip(), indentation)
-
-    # When the stored snippet omits indentation, replace from the physical line
-    # start to avoid retaining the original indentation *and* adding it again.
-    replace_start = line_start if not prefix.strip() else match_start
-    return content[:replace_start] + replacement + content[match_end:], None
+    candidate, error = _replace_physical_line(content, vulnerable_code, fixed_code, line_number)
+    return candidate, error, "line_number_fallback" if candidate is not None else None
 
 
 def get_eligible_findings(findings: list[dict]) -> list[dict]:
@@ -715,7 +784,9 @@ def create_fix_pr(
                 if _is_structural_rewrite(vulnerable_code, fixed_code):
                     skipped_fixes.append(_skip(finding, relative_path, "rejected_unsafe_patch_boundary", "Generated fix is a structural rewrite; manual review required."))
                     continue
-                candidate, replacement_error = _replace_with_context(content, vulnerable_code, fixed_code)
+                candidate, replacement_error, replacement_strategy = _replace_with_context(
+                    content, vulnerable_code, fixed_code, finding.get("line_number")
+                )
                 if candidate is None:
                     skipped_fixes.append(_skip(finding, relative_path, "rejected_unsafe_patch_boundary", replacement_error))
                     continue
@@ -737,7 +808,13 @@ def create_fix_pr(
                     validation["checks"].update(regression["checks"])
                     if not valid:
                         validation = regression
-                validation_details.append({"file": relative_path, **validation})
+                validation_details.append({"file": relative_path, "patch_preview": {
+                    "file": relative_path,
+                    "line_number": finding.get("line_number"),
+                    "vulnerable_code": vulnerable_code,
+                    "fixed_code": fixed_code,
+                    "replacement_strategy": replacement_strategy,
+                }, **validation})
                 if not valid:
                     Path(local_path).write_text(content, encoding="utf-8")
                     skipped_fixes.append(_skip(finding, relative_path, validation["status"], validation["reason"], validation["checks"]))
@@ -748,7 +825,7 @@ def create_fix_pr(
                 file_fixes.append({
                     "vuln_type": finding.get("vuln_type"), "severity": finding.get("severity"),
                     "cvss_score": finding.get("cvss_score"), "file": relative_path,
-                    "line": finding.get("line_number"), "status": "staged",
+                    "line": finding.get("line_number"), "status": "staged", "finding": dict(finding),
                 })
 
             if content == original:
@@ -756,12 +833,22 @@ def create_fix_pr(
             content = _ensure_stdlib_imports(content)
             valid, validation = _validate_python_patch(local_path, original, content)
             validation_details.append({"file": relative_path, **validation})
+            if valid:
+                for fix in file_fixes:
+                    valid, post_validation = _validate_applied_finding_postconditions(fix["finding"], content)
+                    validation_details.append({"file": relative_path, **post_validation})
+                    if not valid:
+                        validation = post_validation
+                        break
             if not valid:
                 Path(local_path).write_text(original, encoding="utf-8")
                 for fix in file_fixes:
-                    skipped_fixes.append({**fix, "status": validation["status"], "reason": validation["reason"], "checks": validation["checks"]})
+                    skipped_fix = {k: v for k, v in fix.items() if k != "finding"}
+                    skipped_fixes.append({**skipped_fix, "status": validation["status"], "reason": validation["reason"], "checks": validation["checks"]})
                 continue
             staged_files[relative_path] = content
+            for fix in file_fixes:
+                fix.pop("finding", None)
             staged_fixes.extend(file_fixes)
 
         if not staged_files:

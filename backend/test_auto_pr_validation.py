@@ -75,7 +75,7 @@ def test_secret_replacement_removes_literal_without_creating_duplicate_assignmen
     original = 'SECRET_KEY = "exposed"\n'
     source_file.write_text(original, encoding="utf-8")
 
-    candidate, error = _replace_with_context(
+    candidate, error, strategy = _replace_with_context(
         original,
         'SECRET_KEY = "exposed"',
         'import os\nSECRET_KEY = os.environ["SECRET_KEY"]',
@@ -124,7 +124,7 @@ def test_multiline_replacement_preserves_source_indentation():
         "    query = f\"SELECT * FROM users WHERE username = '{name}'\"\n"
     )
 
-    candidate, error = _replace_with_context(
+    candidate, error, strategy = _replace_with_context(
         content,
         'query = f"SELECT * FROM users WHERE username = \'{name}\'"',
         'query = "SELECT * FROM users WHERE username = ?"\n'
@@ -142,7 +142,7 @@ def test_multiline_replacement_preserves_source_indentation():
 def test_nested_multiline_replacement_preserves_relative_indentation():
     content = "def endpoint():\n    return redirect(request.args.get('url'))\n"
 
-    candidate, error = _replace_with_context(
+    candidate, error, strategy = _replace_with_context(
         content,
         "return redirect(request.args.get('url'))",
         "target = request.args.get('url', '/')\n"
@@ -179,7 +179,7 @@ def test_ensure_stdlib_imports_does_not_duplicate_existing_os_import():
 def test_multiline_replacement_rejects_partial_statement():
     content = "def endpoint():\n    return redirect(request.args.get('url'))\n"
 
-    candidate, error = _replace_with_context(
+    candidate, error, strategy = _replace_with_context(
         content,
         "redirect(request.args.get('url'))",
         "url = request.args.get('url', '/')\nreturn redirect(url)",
@@ -408,3 +408,70 @@ def test_manual_review_pushes_a_valid_fix_only_after_local_validation(monkeypatc
     assert repo.branch_created is True
     assert repo.updated_content == 'import os\n\nSECRET = os.environ.get("SECRET")\n'
     assert result["validation_details"][-1]["status"] == "tests_not_available"
+
+
+
+def test_spaced_secret_assignment_uses_line_number_fallback():
+    content = 'JWT_SECRET      = "jwt_secret_do_not_share"\n'
+
+    candidate, error, strategy = _replace_with_context(
+        content,
+        'JWT_SECRET = "jwt_secret_do_not_share"',
+        'JWT_SECRET = os.environ["JWT_SECRET"]',
+        line_number=1,
+    )
+
+    assert error is None
+    assert strategy == "line_number_fallback"
+    assert 'JWT_SECRET      = "jwt_secret_do_not_share"' not in candidate
+    assert candidate.count("JWT_SECRET") == 2  # assignment target + environ key
+    assert candidate.count("JWT_SECRET =") == 1
+    assert candidate == 'JWT_SECRET = os.environ["JWT_SECRET"]\n'
+
+
+def test_partial_redirect_line_replacement_uses_line_number_fallback():
+    content = "def redirect_user():\n    return redirect(request.args.get('url'))\n"
+
+    candidate, error, strategy = _replace_with_context(
+        content,
+        "redirect(request.args.get('url'))",
+        "target = request.args.get('url', '/')\n"
+        "if not target.startswith('/') or target.startswith('//'):\n"
+        "    target = '/'\n"
+        "return redirect(target)",
+        line_number=2,
+    )
+
+    assert error is None
+    assert strategy == "line_number_fallback"
+    assert "return redirect(request.args.get('url'))" not in candidate
+    assert candidate == (
+        "def redirect_user():\n"
+        "    target = request.args.get('url', '/')\n"
+        "    if not target.startswith('/') or target.startswith('//'):\n"
+        "        target = '/'\n"
+        "    return redirect(target)\n"
+    )
+
+
+def test_partial_redirect_line_replacement_without_line_number_is_rejected():
+    content = "def redirect_user():\n    return redirect(request.args.get('url'))\n"
+
+    candidate, error, strategy = _replace_with_context(
+        content,
+        "redirect( request.args.get('url') )",
+        "target = request.args.get('url', '/')\nreturn redirect(target)",
+    )
+
+    assert candidate is None
+    assert strategy is None
+    assert "no trusted line_number" in error
+
+
+def test_ensure_stdlib_imports_inserts_after_future_import():
+    source = '#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n"""module docs"""\n\nfrom __future__ import annotations\n\nSECRET_KEY = os.environ["SECRET_KEY"]\n'
+
+    candidate = _ensure_stdlib_imports(source)
+
+    assert candidate.count("import os") == 1
+    assert candidate.index("from __future__ import annotations") < candidate.index("import os") < candidate.index("SECRET_KEY")
