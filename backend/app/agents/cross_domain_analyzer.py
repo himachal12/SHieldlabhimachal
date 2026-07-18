@@ -220,56 +220,17 @@ def _confidence_score(finding: dict) -> float:
     return 0.0
 
 
-def _normalized_code_evidence(code: str) -> str:
-    """Normalize scanner code snippets for cross-scanner dedupe keys."""
-    text = (code or "").strip()
-    if not text:
-        return ""
-
-    # Bandit output can be formatted with a leading line number if exact source
-    # extraction is unavailable. Strip that before comparing with custom rules.
-    text = re.sub(r"^\s*\d+\s+", "", text)
-
-    assignment = re.match(
-        r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
-        r"(?P<quote>['\"])(?P<value>.*?)(?P=quote)\s*(?:#.*)?$",
-        text,
-    )
-    if assignment:
-        return f"assign:{assignment.group('name').lower()}={assignment.group('value')}"
-
-    text = re.sub(r"\s+#.*$", "", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
 def _chain_dedupe_key(finding: dict) -> tuple:
-    """Key findings by vulnerability evidence, ignoring scanner-specific IDs.
-
-    Scanner-overlap reports can point to adjacent lines or use different
-    descriptions for the same vulnerable statement. When vulnerable code is
-    available, treat file + vulnerability type + normalized code as the source
-    of truth so Bandit/custom duplicates collapse for chain generation.
-    """
+    """Key findings by vulnerability evidence, ignoring scanner-specific IDs."""
     evidence = _finding_evidence(finding)
-    path = evidence.get("repository_relative_path") or evidence.get("file_path") or ""
-    code = _normalized_code_evidence(evidence.get("vulnerable_code") or "")
-
-    if evidence["scanner_family"] == "code" and code:
-        return (
-            evidence["scanner_family"],
-            evidence["vuln_type"],
-            path,
-            code,
-        )
-
     return (
         evidence["scanner_family"],
         evidence["vuln_type"],
-        path,
+        evidence.get("repository_relative_path") or evidence.get("file_path") or "",
         evidence.get("line_number"),
         evidence.get("url") or "",
         evidence.get("port"),
-        code,
+        (evidence.get("vulnerable_code") or "").strip(),
         (evidence.get("description") or "").strip(),
     )
 
