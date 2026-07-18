@@ -27,6 +27,12 @@ import {
 const SEVERITY_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO']
 const SEVERITY_SCORE = { CRITICAL: 5, HIGH: 4, MEDIUM: 3, LOW: 2, INFO: 1 }
 
+
+const getRawChainCount = (attackChains = []) => attackChains.reduce((total, chain) => {
+  const groupedCount = Number(chain.source_summary?.grouped_chain_count)
+  return total + (Number.isFinite(groupedCount) && groupedCount > 0 ? groupedCount : 1)
+}, 0)
+
 const SORT_OPTIONS = [
   { value: 'cvss', label: 'Highest CVSS' },
   { value: 'severity', label: 'Severity first' },
@@ -216,6 +222,8 @@ export default function Results() {
   const fixableCount = findings.filter((finding) => finding.fixed_code).length
   const chainFindingCount = findings.filter((finding) => finding.is_cross_domain || chainFindingIds.has(finding.finding_id)).length
   const hasAttackChains = Boolean(results?.attack_chains?.length)
+  const groupedChainCount = results?.attack_chains?.length || 0
+  const rawChainCount = getRawChainCount(results?.attack_chains || [])
 
   if (loading) {
     return (
@@ -330,7 +338,12 @@ export default function Results() {
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Chains</p>
-                <p className="text-2xl font-black text-red-300">{results.attack_chains?.length || 0}</p>
+                <p className="text-2xl font-black text-red-300">{groupedChainCount}</p>
+                {rawChainCount > groupedChainCount && (
+                  <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-red-200/70">
+                    grouped from {rawChainCount} raw paths
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -402,9 +415,13 @@ export default function Results() {
                 <h2 className="text-lg font-black text-white">Threat Path Spotlight</h2>
               </div>
               <span className="rounded-full border border-red-300/25 bg-red-500/10 px-2.5 py-1 text-xs font-black text-red-200">
-                {results.attack_chains.length} chain{results.attack_chains.length > 1 ? 's' : ''}
+                {groupedChainCount} grouped chain{groupedChainCount > 1 ? 's' : ''}
               </span>
-              <p className="text-xs text-slate-500">Only shown when attack-chain data is returned by the backend.</p>
+              <p className="text-xs text-slate-500">
+                {rawChainCount > groupedChainCount
+                  ? `Grouped from ${rawChainCount} related raw paths returned by the backend.`
+                  : 'Only shown when attack-chain data is returned by the backend.'}
+              </p>
             </div>
 
             <div>

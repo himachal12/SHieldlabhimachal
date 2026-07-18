@@ -19,6 +19,11 @@ WEB_SOURCES = {
 }
 
 # Pairs of vuln types that are known to compound risk when found together.
+
+
+SEVERITY_RANK = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0}
+CONFIDENCE_RANK = {"high": 3, "medium": 2, "low": 1}
+
 COMPOUND_PAIRS = [
     ({"SQL Injection", "SQL Injection (Confirmed Active)"}, {"Exposed Database/Service"}),
     ({"Hardcoded Secrets"}, {"Exposed Sensitive Files"}),
@@ -258,6 +263,147 @@ def _dedupe_for_chain_analysis(findings: list[dict]) -> list[dict]:
     return [deduped_by_key[key] for key in order]
 
 
+
+def _unique_preserve_order(items: list) -> list:
+    """Return items without duplicates while preserving display order."""
+    unique = []
+    seen = set()
+    for item in items:
+        marker = json.dumps(item, sort_keys=True, default=str) if isinstance(item, (dict, list)) else str(item)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        unique.append(item)
+    return unique
+
+
+def _evidence_dedupe_key(evidence: dict) -> tuple:
+    """Return a stable key for evidence snapshots inside grouped chains."""
+    return (
+        evidence.get("finding_id") or "",
+        evidence.get("scanner_family") or "",
+        evidence.get("vuln_type") or "",
+        evidence.get("repository_relative_path") or evidence.get("file_path") or "",
+        evidence.get("line_number"),
+        evidence.get("url") or "",
+        evidence.get("port"),
+        (evidence.get("vulnerable_code") or "").strip(),
+    )
+
+
+def _merge_unique_evidence(chains: list[dict]) -> list[dict]:
+    """Collect every unique evidence item from related chains."""
+    merged = []
+    seen = set()
+    for chain in chains:
+        for evidence in chain.get("evidence", []):
+            key = _evidence_dedupe_key(evidence)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(evidence)
+    return merged
+
+
+def _chain_group_component(evidence: dict) -> tuple:
+    """Build a coarse component key so repeated pairwise chains group together.
+
+    The finding explorer should keep each scanner finding. For attack-chain
+    storytelling, however, adjacent hardcoded-secret lines in the same file and
+    multiple exposed sensitive file URLs are one threat narrative, not separate
+    executive-level chains.
+    """
+    vuln_type = evidence.get("vuln_type") or "Unknown"
+    family = evidence.get("scanner_family") or "unknown"
+
+    if vuln_type == "Hardcoded Secrets" and family == "code":
+        return (family, vuln_type, evidence.get("repository_relative_path") or evidence.get("file_path") or "")
+
+    if vuln_type == "Exposed Sensitive Files" and family == "web":
+        return (family, vuln_type, "exposed_sensitive_files")
+
+    return (
+        family,
+        vuln_type,
+        evidence.get("repository_relative_path") or evidence.get("file_path") or "",
+        evidence.get("line_number"),
+        evidence.get("url") or "",
+        evidence.get("port"),
+    )
+
+
+def _attack_chain_group_key(chain: dict) -> tuple:
+    """Group chains that tell the same attacker story with overlapping evidence."""
+    components = [_chain_group_component(evidence) for evidence in chain.get("evidence", [])]
+    return tuple(sorted(components, key=lambda item: tuple(str(part) for part in item)))
+
+
+def _chain_sort_score(chain: dict) -> tuple:
+    """Prefer the strongest representative text when merging related chains."""
+    severity = SEVERITY_RANK.get(str(chain.get("severity", "")).upper(), 0)
+    confidence = CONFIDENCE_RANK.get(str(chain.get("confidence", "")).lower(), 0)
+    evidence_count = len(chain.get("evidence", []))
+    step_count = len(chain.get("attack_steps", [])) + len(chain.get("attack_chain", []))
+    return (severity, confidence, evidence_count, step_count)
+
+
+def _merge_chain_group(chains: list[dict]) -> dict:
+    """Merge related pairwise chains into one user-facing threat path."""
+    representative = max(chains, key=_chain_sort_score).copy()
+    evidence = _merge_unique_evidence(chains)
+    finding_ids = _unique_preserve_order([
+        finding_id
+        for chain in chains
+        for finding_id in chain.get("finding_ids", [])
+    ])
+    finding_types = _unique_preserve_order([
+        evidence_item.get("vuln_type")
+        for evidence_item in evidence
+        if evidence_item.get("vuln_type")
+    ])
+    locations = [item.get("location") for item in evidence if item.get("location")]
+    source_summary = _source_summary(evidence)
+    source_summary.update({
+        "grouped_chain_count": len(chains),
+        "grouped_locations": _unique_preserve_order(locations),
+        "grouped_finding_ids": finding_ids,
+    })
+
+    fix_order = _unique_preserve_order([
+        item
+        for chain in chains
+        for item in chain.get("recommended_fix_order", [])
+    ])
+
+    representative.update({
+        "finding_ids": finding_ids,
+        "finding_types": finding_types,
+        "evidence": evidence,
+        "source_summary": source_summary,
+        "recommended_fix_order": fix_order,
+    })
+    return representative
+
+
+def _dedupe_attack_chains(chains: list[dict]) -> list[dict]:
+    """Collapse repeated pairwise chains into grouped threat narratives."""
+    grouped: dict[tuple, list[dict]] = {}
+    order: list[tuple] = []
+
+    for chain in chains:
+        key = _attack_chain_group_key(chain)
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(chain)
+
+    deduped = [_merge_chain_group(grouped[key]) for key in order]
+    collapsed = len(chains) - len(deduped)
+    if collapsed > 0:
+        logger.info(f"Grouped {len(chains)} raw attack chains into {len(deduped)} user-facing threat paths")
+    return deduped
+
+
 def _humanize_fix_order(fix_order) -> list[str]:
     """Remove internal finding IDs from LLM-produced fix-order text."""
     if isinstance(fix_order, str):
@@ -367,8 +513,11 @@ def analyze_attack_chains(findings: list[dict]) -> list[dict]:
                     f"{chain['severity']} | {chain['time_to_exploit']}"
                 )
 
+    deduped_chains = _dedupe_attack_chains(chains)
+
     logger.info(
         f"Chain analysis complete: {pairs_checked} pairs checked, "
-        f"{groq_calls_made} Groq calls, {len(chains)} chains found"
+        f"{groq_calls_made} Groq calls, {len(chains)} raw chains, "
+        f"{len(deduped_chains)} grouped chains returned"
     )
-    return chains
+    return deduped_chains
