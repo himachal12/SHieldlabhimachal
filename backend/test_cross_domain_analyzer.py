@@ -110,3 +110,216 @@ def test_ensure_finding_ids_assigns_unique_ids():
 
     assert all(finding.get("finding_id") for finding in findings)
     assert findings[0]["finding_id"] != findings[1]["finding_id"]
+
+
+def test_dedupe_for_chain_analysis_keeps_highest_confidence_duplicate():
+    low_confidence_duplicate = {
+        "finding_id": "finding_low11111",
+        "vuln_type": "Hardcoded Secrets",
+        "source": "bandit",
+        "file_path": "app.py",
+        "line_number": 10,
+        "vulnerable_code": '15 API_KEY = "secret"          # scanner-formatted code',
+        "description": "Possible hardcoded secret",
+        "confidence": 0.4,
+    }
+    high_confidence_duplicate = {
+        "finding_id": "finding_high2222",
+        "vuln_type": "Hardcoded Secrets",
+        "source": "custom",
+        "file_path": "app.py",
+        "line_number": 9,
+        "vulnerable_code": 'API_KEY = "secret"',
+        "description": "Custom detector reports the same secret on an adjacent line",
+        "confidence": 0.95,
+    }
+    web_finding = {
+        "finding_id": "finding_web33333",
+        "vuln_type": "Exposed Sensitive Files",
+        "source": "exposed_files_checker",
+        "url": "https://example.test/.env",
+    }
+    original_findings = [low_confidence_duplicate, high_confidence_duplicate, web_finding]
+
+    deduped = analyzer._dedupe_for_chain_analysis(original_findings)
+
+    assert len(original_findings) == 3
+    assert len(deduped) == 2
+    assert deduped[0] is high_confidence_duplicate
+    assert deduped[1] is web_finding
+
+
+def test_analyze_attack_chains_dedupes_before_pair_analysis(monkeypatch):
+    pairs = []
+
+    def fake_analyze_pair(code_finding, web_finding):
+        pairs.append((code_finding["finding_id"], web_finding["finding_id"]))
+        return {
+            "chain_id": "chain_test",
+            "finding_ids": [code_finding["finding_id"], web_finding["finding_id"]],
+            "finding_types": [code_finding["vuln_type"], web_finding["vuln_type"]],
+            "severity": "CRITICAL",
+            "attack_chain": [],
+            "attack_steps": [],
+            "evidence": [],
+            "source_summary": {},
+            "time_to_exploit": "unknown",
+            "impact": "",
+            "reasoning": "",
+            "confidence": "high",
+            "priority_rationale": "",
+            "recommended_fix_order": [],
+        }
+
+    monkeypatch.setattr(analyzer, "_analyze_pair", fake_analyze_pair)
+
+    findings = [
+        {
+            "finding_id": "finding_low11111",
+            "vuln_type": "Hardcoded Secrets",
+            "source": "bandit",
+            "file_path": "app.py",
+            "line_number": 10,
+            "vulnerable_code": '15 API_KEY = "secret"          # scanner-formatted code',
+            "description": "Possible hardcoded secret",
+            "confidence": 0.4,
+        },
+        {
+            "finding_id": "finding_high2222",
+            "vuln_type": "Hardcoded Secrets",
+            "source": "custom",
+            "file_path": "app.py",
+            "line_number": 9,
+            "vulnerable_code": 'API_KEY = "secret"',
+            "description": "Custom detector reports the same secret on an adjacent line",
+            "confidence": 0.95,
+        },
+        {
+            "finding_id": "finding_web33333",
+            "vuln_type": "Exposed Sensitive Files",
+            "source": "exposed_files_checker",
+            "url": "https://example.test/.env",
+        },
+    ]
+
+    chains = analyzer.analyze_attack_chains(findings)
+
+    assert len(chains) == 1
+    assert pairs == [("finding_high2222", "finding_web33333")]
+    assert len(findings) == 3
+
+
+def test_humanize_fix_order_strips_raw_finding_ids_from_chain_output(monkeypatch):
+    payload = {
+        "compounds": True,
+        "attack_chain": ["Step 1: Read exposed .env"],
+        "attack_steps": [],
+        "compounded_severity": "CRITICAL",
+        "recommended_fix_order": [
+            "Fix finding_1234abcd first by blocking /.env",
+            "Then rotate secrets for finding_deadbeef.",
+            "finding_cafebabe - Remove hardcoded credentials",
+        ],
+    }
+    monkeypatch.setattr(analyzer, "groq_call", lambda prompt: json.dumps(payload))
+
+    chain = analyzer._analyze_pair(
+        {
+            "finding_id": "finding_1234abcd",
+            "vuln_type": "Hardcoded Secrets",
+            "source": "code_scanner",
+            "file_path": "app.py",
+            "line_number": 15,
+        },
+        {
+            "finding_id": "finding_deadbeef",
+            "vuln_type": "Exposed Sensitive Files",
+            "source": "exposed_files_checker",
+            "url": "http://localhost:5000/.env",
+        },
+    )
+
+    assert chain["recommended_fix_order"] == [
+        "Fix first by blocking /.env",
+        "Then rotate secrets.",
+        "Remove hardcoded credentials",
+    ]
+    assert all("finding_" not in item for item in chain["recommended_fix_order"])
+
+
+def test_secret_overlap_reduces_nine_candidate_pairs_to_six(monkeypatch):
+    pairs = []
+
+    def fake_analyze_pair(code_finding, web_finding):
+        pairs.append((code_finding["finding_id"], web_finding["url"]))
+        return {
+            "chain_id": f"chain_{len(pairs)}",
+            "finding_ids": [code_finding["finding_id"], web_finding["finding_id"]],
+            "finding_types": [code_finding["vuln_type"], web_finding["vuln_type"]],
+            "severity": "CRITICAL",
+            "attack_chain": [],
+            "attack_steps": [],
+            "evidence": [],
+            "source_summary": {},
+            "time_to_exploit": "unknown",
+            "impact": "",
+            "reasoning": "",
+            "confidence": "high",
+            "priority_rationale": "",
+            "recommended_fix_order": [],
+        }
+
+    monkeypatch.setattr(analyzer, "_analyze_pair", fake_analyze_pair)
+
+    findings = [
+        {
+            "finding_id": "finding_bandit1",
+            "vuln_type": "Hardcoded Secrets",
+            "source": "bandit",
+            "file_path": "app.py",
+            "line_number": 15,
+            "vulnerable_code": '15 SECRET_KEY = "supersecretkey123"          # VULN: Hardcoded secret',
+            "confidence": 0.8,
+        },
+        {
+            "finding_id": "finding_custom1",
+            "vuln_type": "Hardcoded Secrets",
+            "source": "custom_secret_detector",
+            "file_path": "app.py",
+            "line_number": 14,
+            "vulnerable_code": 'SECRET_KEY = "supersecretkey123"          # VULN: Hardcoded secret',
+            "confidence": 0.95,
+        },
+        {
+            "finding_id": "finding_jwt1",
+            "vuln_type": "Hardcoded Secrets",
+            "source": "bandit",
+            "file_path": "app.py",
+            "line_number": 16,
+            "vulnerable_code": 'JWT_SECRET = "jwt_secret_do_not_share"    # VULN: Hardcoded secret',
+            "confidence": 0.3,
+        },
+        *[
+            {
+                "finding_id": f"finding_web{i}",
+                "vuln_type": "Exposed Sensitive Files",
+                "source": "exposed_files_checker",
+                "url": url,
+                "confidence": 0.95,
+            }
+            for i, url in enumerate([
+                "http://localhost:5000/.git/config",
+                "http://localhost:5000/.env",
+                "http://localhost:5000/backup.sql",
+            ])
+        ],
+    ]
+
+    chains = analyzer.analyze_attack_chains(findings)
+
+    assert len(chains) == 6
+    assert len(pairs) == 6
+    assert sum(1 for finding_id, _ in pairs if finding_id == "finding_custom1") == 3
+    assert sum(1 for finding_id, _ in pairs if finding_id == "finding_jwt1") == 3
+    assert all(finding_id != "finding_bandit1" for finding_id, _ in pairs)
+    assert len(findings) == 6
