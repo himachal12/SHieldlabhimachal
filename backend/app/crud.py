@@ -97,7 +97,7 @@ def add_finding(db: Session, scan_id: str, vuln_type: str, severity: str,
     kwargs can include: file_path, line_number, url, port, cvss_score,
     vulnerable_code, fixed_code, fix_explanation, remediation_time, confidence
     """
-    finding_id = f"find_{uuid.uuid4().hex[:8]}"
+    finding_id = kwargs.pop("finding_id", None) or f"find_{uuid.uuid4().hex[:8]}"
 
     finding = Finding(
         scan_id=scan_id,
@@ -179,10 +179,21 @@ def get_report(db: Session, scan_id: str) -> Report | None:
     return db.query(Report).filter(Report.scan_id == scan_id).first()
 
 
-def get_chains_by_scan(db: Session, scan_id: str) -> list:
-    """Get all attack chains for a scan"""
-    from app.database import AttackChain
+def _json_loads(value, default):
+    """Safely decode a JSON column, returning default for old/empty rows."""
     import json
+
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return default
+
+
+def get_chains_by_scan(db: Session, scan_id: str) -> list:
+    """Get all attack chains for a scan, including rich evidence when present."""
+    from app.database import AttackChain
 
     chains = db.query(AttackChain).filter(
         AttackChain.scan_id == scan_id
@@ -190,23 +201,24 @@ def get_chains_by_scan(db: Session, scan_id: str) -> list:
 
     result = []
     for chain in chains:
-        try:
-            # description column stores the step list as JSON
-            attack_steps = json.loads(chain.description or "[]")
-            finding_ids = json.loads(chain.finding_ids or "[]")
-        except (json.JSONDecodeError, TypeError):
-            attack_steps = []
-            finding_ids = []
-
+        attack_chain = _json_loads(chain.description, [])
+        finding_ids = _json_loads(chain.finding_ids, [])
+        evidence = _json_loads(getattr(chain, "evidence", None), [])
         result.append({
             "chain_id": chain.chain_id,
             "finding_ids": finding_ids,
-            "finding_types": [],   # populated below if needed
+            "finding_types": [e.get("vuln_type") for e in evidence if e.get("vuln_type")],
             "severity": chain.severity,
-            "attack_chain": attack_steps,
+            "attack_chain": attack_chain,
+            "attack_steps": _json_loads(getattr(chain, "attack_steps", None), []),
+            "evidence": evidence,
+            "source_summary": _json_loads(getattr(chain, "source_summary", None), {}),
             "time_to_exploit": chain.time_to_exploit or "unknown",
             "impact": chain.impact or "",
-            "reasoning": ""
+            "reasoning": getattr(chain, "reasoning", None) or "",
+            "confidence": getattr(chain, "confidence", None),
+            "priority_rationale": getattr(chain, "priority_rationale", None) or "",
+            "recommended_fix_order": _json_loads(getattr(chain, "recommended_fix_order", None), []),
         })
 
     return result

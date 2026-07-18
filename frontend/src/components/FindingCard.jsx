@@ -23,7 +23,7 @@ const getLocation = (finding) => {
   return 'No location'
 }
 
-export default function FindingCard({ finding }) {
+export default function FindingCard({ finding, chainMembership = [] }) {
   const [expanded, setExpanded] = useState(false)
   const isCodeFinding = Boolean(finding.file_path)
   const remediationStatus = finding.remediation_status || (finding.fixed_code ? 'suggested' : 'detected')
@@ -61,10 +61,14 @@ export default function FindingCard({ finding }) {
             <div className="min-w-0 flex-1">
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <SeverityBadge severity={finding.severity} />
-                {finding.is_cross_domain && (
+                {(finding.is_cross_domain || chainMembership.length > 0) && (
                   <span className="inline-flex items-center gap-1 rounded-full border border-red-400/25 bg-red-500/10 px-2 py-0.5 text-xs font-bold text-red-200">
                     <Link2 size={10} />
-                    Chain
+                    {chainMembership.length === 1
+                      ? `Threat Path #${chainMembership[0]}`
+                      : chainMembership.length > 1
+                        ? `Used in ${chainMembership.length} chains`
+                        : 'Chain'}
                   </span>
                 )}
                 {remediationStatus !== 'detected' && (
@@ -104,6 +108,20 @@ export default function FindingCard({ finding }) {
 
       {expanded && (
         <div className="space-y-4 border-t border-white/10 px-4 pb-4 pt-4">
+          {chainMembership.length > 0 && (
+            <section className="rounded-2xl border border-red-300/20 bg-red-500/10 p-4">
+              <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase tracking-[0.18em] text-red-200">
+                <Link2 size={14} />
+                Attack-chain context
+              </div>
+              <p className="text-sm leading-6 text-red-100/90">
+                {chainMembership.length === 1
+                  ? `This finding is part of Threat Path #${chainMembership[0]}.`
+                  : `This finding is used in ${chainMembership.length} attack chains: ${chainMembership.map((id) => `#${id}`).join(', ')}.`}
+              </p>
+            </section>
+          )}
+
           <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
             <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase tracking-[0.18em] text-cyan-300/80">
               <ShieldCheck size={14} />
