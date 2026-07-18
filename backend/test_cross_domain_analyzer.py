@@ -209,6 +209,102 @@ def test_analyze_attack_chains_dedupes_before_pair_analysis(monkeypatch):
     assert len(findings) == 3
 
 
+def test_analyze_attack_chains_groups_repeated_secret_exposed_file_paths(monkeypatch):
+    def fake_analyze_pair(code_finding, web_finding):
+        code_evidence = analyzer._finding_evidence(code_finding)
+        web_evidence = analyzer._finding_evidence(web_finding)
+        return {
+            "chain_id": f"chain_{code_finding['finding_id']}_{web_finding['finding_id']}",
+            "finding_ids": [code_finding["finding_id"], web_finding["finding_id"]],
+            "finding_types": [code_finding["vuln_type"], web_finding["vuln_type"]],
+            "severity": "CRITICAL",
+            "attack_chain": [
+                f"Step 1: Abuse {code_evidence['location']}",
+                f"Step 2: Access {web_evidence['location']}",
+            ],
+            "attack_steps": [],
+            "evidence": [code_evidence, web_evidence],
+            "source_summary": analyzer._source_summary([code_evidence, web_evidence]),
+            "time_to_exploit": "less than 30 minutes",
+            "impact": "Secrets and exposed files can be chained.",
+            "reasoning": "Hardcoded secrets and exposed sensitive files compound.",
+            "confidence": "high",
+            "priority_rationale": "Fix credential exposure first.",
+            "recommended_fix_order": ["Move secrets to environment variables", "Block public sensitive files"],
+        }
+
+    monkeypatch.setattr(analyzer, "_analyze_pair", fake_analyze_pair)
+
+    findings = [
+        {
+            "finding_id": "finding_secret14",
+            "vuln_type": "Hardcoded Secrets",
+            "source": "custom",
+            "file_path": "app.py",
+            "line_number": 14,
+            "vulnerable_code": 'SECRET_KEY = "supersecretkey123"',
+            "description": "Hardcoded secret",
+            "confidence": 0.95,
+        },
+        {
+            "finding_id": "finding_secret15",
+            "vuln_type": "Hardcoded Secrets",
+            "source": "bandit",
+            "file_path": "app.py",
+            "line_number": 15,
+            "vulnerable_code": 'SECRET_KEY = "supersecretkey123"',
+            "description": "Hardcoded secret",
+            "confidence": 0.8,
+        },
+        {
+            "finding_id": "finding_jwt16",
+            "vuln_type": "Hardcoded Secrets",
+            "source": "bandit",
+            "file_path": "app.py",
+            "line_number": 16,
+            "vulnerable_code": 'JWT_SECRET = "jwt_secret_do_not_share"',
+            "description": "Hardcoded JWT secret",
+            "confidence": 0.8,
+        },
+        {
+            "finding_id": "finding_git",
+            "vuln_type": "Exposed Sensitive Files",
+            "source": "exposed_files_checker",
+            "url": "http://localhost:5000/.git/config",
+            "scan_mode": "passive",
+        },
+        {
+            "finding_id": "finding_env",
+            "vuln_type": "Exposed Sensitive Files",
+            "source": "exposed_files_checker",
+            "url": "http://localhost:5000/.env",
+            "scan_mode": "passive",
+        },
+        {
+            "finding_id": "finding_backup",
+            "vuln_type": "Exposed Sensitive Files",
+            "source": "exposed_files_checker",
+            "url": "http://localhost:5000/backup.sql",
+            "scan_mode": "passive",
+        },
+    ]
+
+    chains = analyzer.analyze_attack_chains(findings)
+
+    assert len(chains) == 1
+    assert chains[0]["source_summary"]["grouped_chain_count"] == 9
+    assert set(chains[0]["finding_ids"]) == {finding["finding_id"] for finding in findings}
+    assert chains[0]["finding_types"] == ["Hardcoded Secrets", "Exposed Sensitive Files"]
+    assert {item["location"] for item in chains[0]["evidence"]} == {
+        "app.py:14",
+        "app.py:15",
+        "app.py:16",
+        "http://localhost:5000/.git/config",
+        "http://localhost:5000/.env",
+        "http://localhost:5000/backup.sql",
+    }
+
+
 def test_humanize_fix_order_strips_raw_finding_ids_from_chain_output(monkeypatch):
     payload = {
         "compounds": True,

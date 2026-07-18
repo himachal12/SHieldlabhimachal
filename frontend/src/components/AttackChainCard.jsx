@@ -137,6 +137,7 @@ export default function AttackChainCard({ chain, index }) {
   const sourceSummary = chain.source_summary || {}
   const summaryModes = sourceSummary.scan_modes || []
   const evidenceType = sourceSummary.evidence_type || (evidence.length ? 'mixed' : null)
+  const groupedChainCount = sourceSummary.grouped_chain_count || 1
 
   return (
     <div className="attack-chain-card mb-4 overflow-hidden">
@@ -172,6 +173,12 @@ export default function AttackChainCard({ chain, index }) {
           </div>
 
           <div className="flex items-center gap-3 md:flex-shrink-0">
+            {groupedChainCount > 1 && (
+              <div className="inline-flex items-center gap-1.5 rounded-full border border-red-300/20 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-100">
+                <Route size={13} />
+                Grouped from {groupedChainCount} paths
+              </div>
+            )}
             {chain.time_to_exploit && (
               <div className="inline-flex items-center gap-1.5 rounded-full border border-orange-300/20 bg-orange-400/10 px-3 py-1.5 text-xs font-semibold text-orange-200">
                 <Clock size={13} />
