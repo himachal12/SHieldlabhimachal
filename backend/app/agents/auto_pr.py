@@ -201,10 +201,12 @@ def _validate_vulnerability_fix(
 
 
 def _validate_full_file_regression(finding: dict, candidate: str) -> tuple[bool, dict]:
-    """Verify the entire patched module no longer reproduces the finding.
+    """Verify the patched finding no longer reproduces in the candidate module.
 
-    This is deliberately separate from the local patch checks: a valid snippet
-    is not sufficient when a duplicate secret or unsafe statement remains.
+    Regression checks are targeted to the finding being patched. A valid fix for
+    ``SECRET_KEY`` must not be rejected just because ``API_TOKEN`` is another
+    pending finding elsewhere in the same file, but duplicate or still-literal
+    assignments for the patched variable remain unsafe and are rejected.
     """
     vuln_type = finding.get("vuln_type", "")
     original = (finding.get("vulnerable_code") or "").strip()
@@ -215,7 +217,6 @@ def _validate_full_file_regression(finding: dict, candidate: str) -> tuple[bool,
                        "reason": "The original vulnerable source remains in the patched file."}
     path = finding.get("repository_relative_path") or finding.get("file_path") or "candidate.py"
     if vuln_type == "Hardcoded Secrets":
-        findings = detect_hardcoded_secrets(path, candidate)
         target = re.match(r"\s*([A-Z][A-Z0-9_]*)\s*=", original)
         name = target.group(1) if target else None
         assignments = re.findall(r"(?m)^\s*" + re.escape(name or "") + r"\s*=", candidate) if name else []
@@ -223,10 +224,20 @@ def _validate_full_file_regression(finding: dict, candidate: str) -> tuple[bool,
             checks["single_secret_assignment"] = "failed"
             return False, {"status": "rejected_security_regression", "checks": checks,
                            "reason": f"Expected exactly one assignment for {name}; found {len(assignments)}."}
-        if findings:
+
+        # Re-scan only for the patched variable. Other hardcoded secrets in the
+        # same file may be separate pending findings and should not block this
+        # valid replacement from being staged.
+        remaining_for_target = []
+        if name:
+            for detected in detect_hardcoded_secrets(path, candidate):
+                detected_code = detected.get("vulnerable_code") or ""
+                if re.match(r"\s*" + re.escape(name) + r"\s*=", detected_code):
+                    remaining_for_target.append(detected)
+        if remaining_for_target:
             checks["detector_rescan"] = "failed"
             return False, {"status": "rejected_security_regression", "checks": checks,
-                           "reason": "Hardcoded-secret detector still reports a secret in the patched file."}
+                           "reason": f"Hardcoded-secret detector still reports {name} in the patched file."}
         checks.update({"single_secret_assignment": "passed", "detector_rescan": "passed"})
     elif vuln_type == "Unvalidated Redirects":
         if detect_unvalidated_redirects(path, candidate):
@@ -283,16 +294,16 @@ def _get_base_indent(code: str) -> str:
 
 
 def _apply_indent(fixed_code: str, base_indent: str) -> str:
-    """
-    Apply base_indent to every non-empty line of fixed_code.
-    Strips existing leading whitespace first, then re-indents.
-    This fixes Problem 2: LLM-generated fixes often have wrong or missing indent.
-    """
+    """Apply base_indent while preserving relative indentation in fixed_code."""
     lines = fixed_code.split("\n")
+    non_empty = [line for line in lines if line.strip()]
+    if not non_empty:
+        return ""
+    min_indent = min(len(line) - len(line.lstrip(" 	")) for line in non_empty)
     result = []
     for line in lines:
         if line.strip():
-            result.append(base_indent + line.lstrip())
+            result.append(base_indent + line[min_indent:])
         else:
             result.append("")
     return "\n".join(result)
@@ -331,6 +342,51 @@ def _import_roots(source: str) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             roots.add(node.module.split(".")[0])
     return roots
+
+
+def _has_import(source: str, module: str) -> bool:
+    pattern = rf"(?m)^\s*import\s+{re.escape(module)}(?:\s|$|#|,)"
+    return bool(re.search(pattern, source))
+
+
+def _insertion_index_after_header(source: str) -> int:
+    """Return a safe index for inserting stdlib imports once per file."""
+    lines = source.splitlines(keepends=True)
+    index = 0
+    if lines and lines[0].startswith("#!"):
+        index = 1
+    if index < len(lines) and re.match(r"#.*coding[:=]", lines[index]):
+        index += 1
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return sum(len(line) for line in lines[:index])
+    body = list(tree.body)
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
+        index = max(index, getattr(body[0], "end_lineno", body[0].lineno))
+    while index < len(lines) and lines[index].strip() == "":
+        index += 1
+    for node in body:
+        if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+            index = max(index, getattr(node, "end_lineno", node.lineno))
+    while index < len(lines) and lines[index].strip() == "":
+        index += 1
+    return sum(len(line) for line in lines[:index])
+
+
+def _ensure_stdlib_imports(source: str) -> str:
+    """Normalize imports required by staged fixes once per file."""
+    required = []
+    if "os.environ" in source and not _has_import(source, "os"):
+        required.append("import os")
+    if not required:
+        return source
+    insertion = _insertion_index_after_header(source)
+    prefix = source[:insertion]
+    suffix = source[insertion:]
+    separator_before = "" if not prefix or prefix.endswith("\n") else "\n"
+    separator_after = "\n" if suffix.startswith("\n") else "\n\n"
+    return prefix + separator_before + "\n".join(required) + separator_after + suffix
 
 
 def _validate_python_patch(file_path: str, original: str, candidate: str) -> tuple[bool, dict]:
@@ -697,6 +753,7 @@ def create_fix_pr(
 
             if content == original:
                 continue
+            content = _ensure_stdlib_imports(content)
             valid, validation = _validate_python_patch(local_path, original, content)
             validation_details.append({"file": relative_path, **validation})
             if not valid:

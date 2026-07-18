@@ -21,6 +21,7 @@ if "github" not in sys.modules:
 from app.agents import auto_pr
 from app.agents.auto_pr import (
     _build_pr_description,
+    _ensure_stdlib_imports,
     _replace_with_context,
     _run_project_tests,
     _validate_full_file_regression,
@@ -40,15 +41,15 @@ def test_full_file_secret_regression_rejects_duplicate_assignment():
     assert detail["checks"]["single_secret_assignment"] == "failed"
 
 
-def test_full_file_secret_regression_requires_detector_to_clear():
+def test_full_file_secret_regression_allows_other_pending_secrets():
     valid, detail = _validate_full_file_regression({
         "vuln_type": "Hardcoded Secrets",
         "repository_relative_path": "settings.py",
         "vulnerable_code": 'SECRET_KEY = "exposed"',
     }, 'SECRET_KEY = os.environ["SECRET_KEY"]\nAPI_TOKEN = "still-exposed"\n')
 
-    assert valid is False
-    assert detail["checks"]["detector_rescan"] == "failed"
+    assert valid is True
+    assert detail["checks"]["detector_rescan"] == "passed"
 
 
 def test_valid_python_patch_is_compiled(tmp_path):
@@ -136,6 +137,43 @@ def test_multiline_replacement_preserves_source_indentation():
         "    query = \"SELECT * FROM users WHERE username = ?\"\n"
         "    cursor.execute(query, (name,))\n"
     )
+
+
+def test_nested_multiline_replacement_preserves_relative_indentation():
+    content = "def endpoint():\n    return redirect(request.args.get('url'))\n"
+
+    candidate, error = _replace_with_context(
+        content,
+        "return redirect(request.args.get('url'))",
+        "target = request.args.get('url', '/')\n"
+        "if not target.startswith('/') or target.startswith('//'):\n"
+        "    target = '/'\n"
+        "return redirect(target)",
+    )
+
+    assert error is None
+    assert candidate == (
+        "def endpoint():\n"
+        "    target = request.args.get('url', '/')\n"
+        "    if not target.startswith('/') or target.startswith('//'):\n"
+        "        target = '/'\n"
+        "    return redirect(target)\n"
+    )
+
+
+def test_ensure_stdlib_imports_adds_os_once_after_docstring():
+    source = '"""settings"""\n\nSECRET_KEY = os.environ["SECRET_KEY"]\nAPI_TOKEN = os.environ["API_TOKEN"]\n'
+
+    candidate = _ensure_stdlib_imports(source)
+
+    assert candidate.count("import os") == 1
+    assert candidate == '"""settings"""\n\nimport os\n\nSECRET_KEY = os.environ["SECRET_KEY"]\nAPI_TOKEN = os.environ["API_TOKEN"]\n'
+
+
+def test_ensure_stdlib_imports_does_not_duplicate_existing_os_import():
+    source = 'import os\nSECRET_KEY = os.environ["SECRET_KEY"]\n'
+
+    assert _ensure_stdlib_imports(source) == source
 
 
 def test_multiline_replacement_rejects_partial_statement():
@@ -368,5 +406,5 @@ def test_manual_review_pushes_a_valid_fix_only_after_local_validation(monkeypatc
 
     assert result["success"] is True
     assert repo.branch_created is True
-    assert repo.updated_content == 'SECRET = os.environ.get("SECRET")\n'
+    assert repo.updated_content == 'import os\n\nSECRET = os.environ.get("SECRET")\n'
     assert result["validation_details"][-1]["status"] == "tests_not_available"
