@@ -123,7 +123,7 @@ def test_windows_paths_with_spaces(sqlmap_config):
     assert command[command.index("-p") + 1] == "q"
     assert "--batch" in command
     assert "--answers" in command
-    assert "--max-requests=7" in command
+    assert not any(part.startswith("--max-requests") for part in command)
     assert "--output-format=json" not in command
 
 
@@ -153,7 +153,7 @@ def test_active_scan_uses_sqlmap_launcher(monkeypatch):
     monkeypatch.setattr(
         sqlmap_runner,
         "run_sqlmap_active",
-        lambda target_url, max_requests: [{"source": "sqlmap_active", "url": target_url}],
+        lambda target_url, params=None, max_requests=50: [{"source": "sqlmap_active", "url": target_url, "params": params}],
     )
 
     findings = web_scanner.scan_web_target(
@@ -163,7 +163,7 @@ def test_active_scan_uses_sqlmap_launcher(monkeypatch):
         active_urls=["http://example.com/?id=1"],
     )
 
-    assert findings == [{"source": "sqlmap_active", "url": "http://example.com/?id=1", "scan_mode": "active"}]
+    assert findings == [{"source": "sqlmap_active", "url": "http://example.com/?id=1", "params": ["id"], "scan_mode": "active"}]
 
 
 def test_combined_scan_passes_active_urls(monkeypatch):
@@ -214,3 +214,21 @@ def test_combined_scan_passes_active_urls(monkeypatch):
 
     assert captured["active_urls"] == ["http://example.com/?id=1"]
     assert captured["scan_mode"] == ScanMode.ACTIVE
+
+
+def test_extract_query_params_deduplicates_url_parameters():
+    assert sqlmap_runner.extract_query_params("http://a.test/tenders?tender_id=1&page=2&tender_id=3") == ["tender_id", "page"]
+
+
+def test_execute_sqlmap_treats_option_error_as_tool_failure(sqlmap_config, monkeypatch):
+    popen = _popen_factory(
+        stdout="",
+        stderr="Usage: sqlmap.py [options]\nsqlmap.py: error: no such option: --max-requests\n",
+        returncode=0,
+    )
+    monkeypatch.setattr(sqlmap_runner.subprocess, "Popen", popen)
+
+    result = sqlmap_runner.execute_sqlmap(sqlmap_runner.build_sqlmap_command("http://a.test/?id=1"))
+
+    assert result.error.startswith("tool_error:")
+    assert "no such option" in result.error

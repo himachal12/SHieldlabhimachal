@@ -20,7 +20,8 @@ Return only a complete JSON object matching the requested schema. Preserve the
 existing function behavior and patch boundary. Do not add dependencies. Do not
 include imports inside fixed_code; list required standard-library imports in the
 JSON metadata/explanation and let Auto-PR place them once per file. Do not
-replace a partial expression with a multiline block. If a safe
+replace a partial expression with a multiline block unless the patch layer can
+safely replace the full reported line. Prefer minimal replacements. If a safe
 patch requires broader context, multiple unrelated statements, a data migration,
 or an unverified behavioral change, return manual_review_required=true and an
 empty fixed_code. Before responding, verify syntax, indentation, identifiers,

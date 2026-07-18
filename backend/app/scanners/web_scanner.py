@@ -146,7 +146,7 @@ def scan_web_target(
     # ACTIVE SCANNING (ONLY if consent confirmed)
     # =========================================================
     if scan_mode == ScanMode.ACTIVE and consent_confirmed:
-        from app.scanners.sqlmap_runner import get_sqlmap_unavailable_reason, run_sqlmap_active
+        from app.scanners.sqlmap_runner import extract_query_params, get_sqlmap_unavailable_reason, run_sqlmap_active
 
         if not active_urls:
             logger.warning(
@@ -162,6 +162,7 @@ def scan_web_target(
                 for url in active_urls:
                     sqlmap_findings = run_sqlmap_active(
                         target_url=url,
+                        params=extract_query_params(url),
                         max_requests=settings.SQLMAP_MAX_REQUESTS
                     )
                     for f in sqlmap_findings:
