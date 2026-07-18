@@ -5,6 +5,7 @@ attack chains where multiple findings compound into greater risk.
 """
 
 import json
+import re
 import uuid
 from app.utils.llm import groq_call
 from app.utils.logger import get_logger
@@ -32,6 +33,7 @@ CHAIN_ANALYSIS_PROMPT = """You are a penetration tester analyzing how multiple v
 
 Use ONLY the evidence below. Do not invent locations, secrets, URLs, ports, files, scanners, or source code.
 Every structured attack step must reference the provided source/location and include uses_finding_ids with at least one listed finding_id.
+Recommended fix order items must be human-readable remediation steps and must not include raw internal finding IDs such as finding_1234abcd.
 If the evidence is not enough to explain a real chain, return compounds=false.
 
 FINDING 1 EVIDENCE:
@@ -95,9 +97,11 @@ Respond ONLY with valid JSON, no markdown:
   "reasoning": "why these findings compound using the evidence",
   "confidence": "high|medium|low",
   "priority_rationale": "why this chain should be prioritized",
-  "recommended_fix_order": ["first fix", "second fix"]
+  "recommended_fix_order": ["human-readable first fix with no raw finding IDs", "human-readable second fix with no raw finding IDs"]
 }}"""
 
+
+FINDING_ID_PATTERN = re.compile(r"\bfinding_[0-9a-fA-F]{8,}\b")
 
 
 def ensure_finding_ids(findings: list[dict]) -> None:
@@ -199,6 +203,88 @@ def _format_prompt_value(value) -> str:
     return str(value)
 
 
+def _confidence_score(finding: dict) -> float:
+    """Return a comparable numeric confidence for dedupe preference."""
+    confidence = finding.get("confidence", 0)
+    if isinstance(confidence, (int, float)):
+        return float(confidence)
+    if isinstance(confidence, str):
+        normalized = confidence.strip().lower()
+        labels = {"high": 1.0, "medium": 0.6, "low": 0.3}
+        if normalized in labels:
+            return labels[normalized]
+        try:
+            return float(normalized)
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _chain_dedupe_key(finding: dict) -> tuple:
+    """Key findings by vulnerability evidence, ignoring scanner-specific IDs."""
+    evidence = _finding_evidence(finding)
+    return (
+        evidence["scanner_family"],
+        evidence["vuln_type"],
+        evidence.get("repository_relative_path") or evidence.get("file_path") or "",
+        evidence.get("line_number"),
+        evidence.get("url") or "",
+        evidence.get("port"),
+        (evidence.get("vulnerable_code") or "").strip(),
+        (evidence.get("description") or "").strip(),
+    )
+
+
+def _dedupe_for_chain_analysis(findings: list[dict]) -> list[dict]:
+    """Collapse duplicate scanner-overlap findings only for chain generation.
+
+    The original findings list is left untouched so every scanner finding can
+    still be persisted and displayed in the finding explorer. When two findings
+    share the same vulnerability evidence, prefer the highest-confidence one.
+    """
+    deduped_by_key: dict[tuple, dict] = {}
+    order: list[tuple] = []
+
+    for finding in findings:
+        key = _chain_dedupe_key(finding)
+        existing = deduped_by_key.get(key)
+        if existing is None:
+            deduped_by_key[key] = finding
+            order.append(key)
+            continue
+        if _confidence_score(finding) > _confidence_score(existing):
+            deduped_by_key[key] = finding
+
+    return [deduped_by_key[key] for key in order]
+
+
+def _humanize_fix_order(fix_order) -> list[str]:
+    """Remove internal finding IDs from LLM-produced fix-order text."""
+    if isinstance(fix_order, str):
+        items = [fix_order]
+    elif isinstance(fix_order, list):
+        items = fix_order
+    else:
+        return []
+
+    cleaned_items = []
+    for item in items:
+        text = str(item).strip()
+        if not text:
+            continue
+        text = FINDING_ID_PATTERN.sub("", text)
+        text = re.sub(r"\s+([,.;:])", r"\1", text)
+        text = re.sub(r"\(\s*\)", "", text)
+        text = re.sub(r"\[\s*\]", "", text)
+        text = re.sub(r"\s{2,}", " ", text)
+        text = re.sub(r"\b(for|from|in|on|with|of|to)\s*([.;:,]|$)", r"\2", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s+([,.;:])", r"\1", text)
+        text = re.sub(r"\s+-\s*$", "", text).strip(" -")
+        if text:
+            cleaned_items.append(text)
+    return cleaned_items
+
+
 def _analyze_pair(f1: dict, f2: dict) -> dict | None:
     """Ask Groq whether two findings compound into an attack chain."""
     evidence = [_finding_evidence(f1), _finding_evidence(f2)]
@@ -245,14 +331,15 @@ def _analyze_pair(f1: dict, f2: dict) -> dict | None:
         "reasoning": parsed.get("reasoning", ""),
         "confidence": parsed.get("confidence", "medium"),
         "priority_rationale": parsed.get("priority_rationale", ""),
-        "recommended_fix_order": parsed.get("recommended_fix_order", []),
+        "recommended_fix_order": _humanize_fix_order(parsed.get("recommended_fix_order", [])),
     }
 
 
 def analyze_attack_chains(findings: list[dict]) -> list[dict]:
     """Find all attack chains across a findings list."""
-    code_findings = [f for f in findings if _scanner_family(f) == "code"]
-    web_findings = [f for f in findings if _scanner_family(f) == "web"]
+    chain_findings = _dedupe_for_chain_analysis(findings)
+    code_findings = [f for f in chain_findings if _scanner_family(f) == "code"]
+    web_findings = [f for f in chain_findings if _scanner_family(f) == "web"]
 
     if not code_findings or not web_findings:
         logger.info("No cross-domain pairs to analyze (need both code + web findings)")
