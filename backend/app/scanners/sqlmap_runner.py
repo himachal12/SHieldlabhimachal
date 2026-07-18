@@ -17,6 +17,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
+from urllib.parse import parse_qsl, urlsplit
 from pathlib import Path
 from typing import Sequence
 
@@ -145,8 +146,6 @@ def build_sqlmap_command(
         config.sqlmap_path,
         "-u",
         target_url,
-
-        
         "--level=1",
         "--risk=1",
         "--timeout=10",
@@ -154,7 +153,6 @@ def build_sqlmap_command(
         "--technique=BEU",
         "--no-cast",
         "--flush-session",
-        f"--max-requests={max_requests}",
     ]
     if params:
         command.extend(["-p", ",".join(params)])
@@ -180,6 +178,34 @@ def _reader_thread(stream, stream_name: str, output_queue: queue.Queue[tuple[str
         except Exception:
             pass
 
+
+def extract_query_params(target_url: str) -> list[str]:
+    """Return unique query parameter names from an active-scan URL."""
+    query = urlsplit(target_url).query
+    if not query:
+        return []
+    names: list[str] = []
+    for name, _ in parse_qsl(query, keep_blank_values=True):
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _sqlmap_tool_error(stdout: str, stderr: str) -> str | None:
+    """Detect SQLMap CLI/usage failures that can exit 0 on some platforms."""
+    combined = stdout + "\n" + stderr
+    lower = combined.lower()
+    tool_error_markers = (
+        "no such option",
+        "unrecognized arguments",
+        "unknown option",
+        "invalid option",
+    )
+    if any(marker in lower for marker in tool_error_markers):
+        return combined.strip()[:1000]
+    if "usage: sqlmap.py" in lower and "error:" in lower:
+        return combined.strip()[:1000]
+    return None
 
 def execute_sqlmap(command: Sequence[str], timeout: int = DEFAULT_SQLMAP_TIMEOUT) -> SQLMapResult:
     """
@@ -273,6 +299,10 @@ def execute_sqlmap(command: Sequence[str], timeout: int = DEFAULT_SQLMAP_TIMEOUT
         logger.warning(f"SQLMap stderr: {stderr[:SQLMAP_OUTPUT_LOG_LIMIT]}")
     if timed_out:
         return SQLMapResult(final_command, returncode, stdout, stderr, timed_out=True, error="timeout")
+    tool_error = _sqlmap_tool_error(stdout, stderr)
+    if tool_error:
+        logger.error(f"SQLMap command failed before testing target: {tool_error[:SQLMAP_OUTPUT_LOG_LIMIT]}")
+        return SQLMapResult(final_command, returncode, stdout, stderr, error=f"tool_error: {tool_error}")
     if returncode == 0:
         logger.info("SQLMap completed successfully.")
     return SQLMapResult(final_command, returncode, stdout, stderr)
