@@ -136,6 +136,21 @@ export default function Results() {
 
   const findings = useMemo(() => results?.findings || [], [results])
 
+  const chainFindingIds = useMemo(() => new Set(
+    (results?.attack_chains || []).flatMap((chain) => chain.finding_ids || [])
+  ), [results])
+
+  const chainMembership = useMemo(() => {
+    const membership = new Map()
+    ;(results?.attack_chains || []).forEach((chain, chainIndex) => {
+      ;(chain.finding_ids || []).forEach((findingId) => {
+        if (!membership.has(findingId)) membership.set(findingId, [])
+        membership.get(findingId).push(chainIndex + 1)
+      })
+    })
+    return membership
+  }, [results])
+
   const severityCounts = useMemo(() => {
     const fromFindings = findings.reduce((acc, finding) => {
       acc[finding.severity] = (acc[finding.severity] || 0) + 1
@@ -159,7 +174,7 @@ export default function Results() {
     const filtered = findings.filter((finding) => {
       const matchesSeverity = filter === 'ALL' || finding.severity === filter
       const matchesFixable = !showFixableOnly || finding.remediation_status === 'suggested'
-      const matchesChain = !showChainsOnly || Boolean(finding.is_cross_domain)
+      const matchesChain = !showChainsOnly || Boolean(finding.is_cross_domain) || chainFindingIds.has(finding.finding_id)
       const searchTarget = [
         finding.vuln_type,
         finding.description,
@@ -184,21 +199,22 @@ export default function Results() {
       }
       return (b.cvss_score || 0) - (a.cvss_score || 0)
     })
-  }, [findings, filter, query, showChainsOnly, showFixableOnly, sortBy])
+  }, [chainFindingIds, findings, filter, query, showChainsOnly, showFixableOnly, sortBy])
 
   const priorityFindings = useMemo(() => {
     return [...findings]
       .sort((a, b) => {
-        const aScore = (SEVERITY_SCORE[a.severity] || 0) * 20 + (a.cvss_score || 0) + (a.is_cross_domain ? 8 : 0) + (a.fixed_code ? 3 : 0)
-        const bScore = (SEVERITY_SCORE[b.severity] || 0) * 20 + (b.cvss_score || 0) + (b.is_cross_domain ? 8 : 0) + (b.fixed_code ? 3 : 0)
+        const aScore = (SEVERITY_SCORE[a.severity] || 0) * 20 + (a.cvss_score || 0) + ((a.is_cross_domain || chainFindingIds.has(a.finding_id)) ? 8 : 0) + (a.fixed_code ? 3 : 0)
+        const bScore = (SEVERITY_SCORE[b.severity] || 0) * 20 + (b.cvss_score || 0) + ((b.is_cross_domain || chainFindingIds.has(b.finding_id)) ? 8 : 0) + (b.fixed_code ? 3 : 0)
         return bScore - aScore
       })
       .slice(0, 5)
-  }, [findings])
+  }, [chainFindingIds, findings])
+
 
   const riskLevel = results ? getRiskLevel(results) : 'LOW'
   const fixableCount = findings.filter((finding) => finding.fixed_code).length
-  const chainFindingCount = findings.filter((finding) => finding.is_cross_domain).length
+  const chainFindingCount = findings.filter((finding) => finding.is_cross_domain || chainFindingIds.has(finding.finding_id)).length
   const hasAttackChains = Boolean(results?.attack_chains?.length)
 
   if (loading) {
@@ -433,7 +449,7 @@ export default function Results() {
                       <span className="rounded-full bg-cyan-300/10 px-2 py-0.5 text-[10px] font-bold text-cyan-200">CVSS {finding.cvss_score.toFixed(1)}</span>
                     )}
                     {finding.fixed_code && <span className="rounded-full bg-green-400/10 px-2 py-0.5 text-[10px] font-bold text-green-200">Fix</span>}
-                    {finding.is_cross_domain && <span className="rounded-full bg-red-400/10 px-2 py-0.5 text-[10px] font-bold text-red-200">Chain</span>}
+                    {(finding.is_cross_domain || chainFindingIds.has(finding.finding_id)) && <span className="rounded-full bg-red-400/10 px-2 py-0.5 text-[10px] font-bold text-red-200">Chain</span>}
                   </div>
                 </button>
               ))}
@@ -521,6 +537,7 @@ export default function Results() {
               <FindingCard
                 key={finding.finding_id}
                 finding={finding}
+                chainMembership={chainMembership.get(finding.finding_id) || []}
               />
             ))
           )}

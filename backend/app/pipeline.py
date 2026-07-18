@@ -41,6 +41,7 @@ def _update_progress(db: Session, scan_id: str, progress: int, stage: str):
     logger.info(f"[{scan_id}] {progress}% — {stage}")
 
 
+
 def run_code_scan_pipeline(
     db: Session,
     scan_id: str,
@@ -246,7 +247,8 @@ def run_combined_pipeline(
         # ── Cross-domain analysis ─────────────────────────────────
         _update_progress(db, scan_id, 75, "Running cross-domain attack chain analysis...")
 
-        from app.agents.cross_domain_analyzer import analyze_attack_chains
+        from app.agents.cross_domain_analyzer import analyze_attack_chains, ensure_finding_ids
+        ensure_finding_ids(all_findings)
         chains = analyze_attack_chains(all_findings)
 
         # Tag findings that are part of a chain
@@ -300,6 +302,7 @@ def _persist_findings(db: Session, scan_id: str, findings: list[dict]):
             crud.add_finding(
                 db=db,
                 scan_id=scan_id,
+                finding_id=f.get("finding_id"),
                 vuln_type=f.get("vuln_type", "Unknown"),
                 severity=f.get("severity", "MEDIUM"),
                 description=f.get("description", ""),
@@ -331,7 +334,7 @@ def _persist_findings(db: Session, scan_id: str, findings: list[dict]):
 
 def _persist_chains(db: Session, scan_id: str, chains: list[dict]):
     """Save attack chains to database."""
-    from app.database import AttackChain, SessionLocal
+    from app.database import AttackChain
     import json
 
     db_session = db
@@ -345,6 +348,13 @@ def _persist_chains(db: Session, scan_id: str, chains: list[dict]):
                 description=json.dumps(chain.get("attack_chain", [])),
                 time_to_exploit=chain.get("time_to_exploit", "unknown"),
                 impact=chain.get("impact", ""),
+                evidence=json.dumps(chain.get("evidence", [])),
+                attack_steps=json.dumps(chain.get("attack_steps", [])),
+                source_summary=json.dumps(chain.get("source_summary", {})),
+                confidence=chain.get("confidence"),
+                priority_rationale=chain.get("priority_rationale", ""),
+                recommended_fix_order=json.dumps(chain.get("recommended_fix_order", [])),
+                reasoning=chain.get("reasoning", ""),
             )
             db_session.add(chain_record)
             db_session.commit()

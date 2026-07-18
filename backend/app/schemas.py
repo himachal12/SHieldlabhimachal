@@ -227,12 +227,18 @@ class AttackChainSchema(BaseModel):
     """A cross-domain attack chain linking multiple findings"""
     chain_id: str
     finding_ids: List[str]
-    finding_types: List[str]
+    finding_types: List[str] = Field(default_factory=list)
     severity: SeverityEnum
-    attack_chain: List[str]       # Step-by-step attack path
+    attack_chain: List[str] = Field(default_factory=list)  # Backward-compatible attack path
+    attack_steps: List[dict] = Field(default_factory=list)
+    evidence: List[dict] = Field(default_factory=list)
+    source_summary: dict = Field(default_factory=dict)
     time_to_exploit: str
     impact: str
     reasoning: str = ""
+    confidence: Optional[str] = None
+    priority_rationale: str = ""
+    recommended_fix_order: List[str] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -283,6 +289,7 @@ class FindingSchema(BaseModel):
     remediation_time: Optional[str] = None
     confidence: float = Field(1.0, ge=0.0, le=1.0)
     is_false_positive: bool = False
+    is_cross_domain: bool = False
 
     class Config:
         from_attributes = True
@@ -301,7 +308,7 @@ class ResultsResponse(BaseModel):
     medium_count: int
     low_count: int
     findings: List[FindingSchema]
-    attack_chains: List[AttackChainSchema] = []   # ← ADD THIS
+    attack_chains: List[AttackChainSchema] = Field(default_factory=list)
     report_path: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None
