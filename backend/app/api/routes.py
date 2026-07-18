@@ -307,6 +307,13 @@ async def create_fix_pr(
             "line_number": f.line_number,
             "vulnerable_code": f.vulnerable_code,
             "fixed_code": f.fixed_code,
+            "fix_source": f.fix_source,
+            "remediation_status": f.remediation_status,
+            "source_file_hash": f.source_file_hash,
+            "repository_relative_path": f.repository_relative_path,
+            "repository_commit": f.repository_commit,
+            "finding_rule_id": f.finding_rule_id,
+            "patch_kind": f.patch_kind,
             "fix_explanation": f.fix_explanation,
             "is_false_positive": f.is_false_positive,
             "source": "bandit"  # default for code findings

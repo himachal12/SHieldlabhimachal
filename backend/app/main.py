@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from app.database import init_db
 
 # Load environment variables from .env file
 load_dotenv()
@@ -39,6 +40,10 @@ async def lifespan(app: FastAPI):
     logger.info(f"🔧 Debug mode: {DEBUG}")
     logger.info(f"🧠 Ollama API: {os.getenv('OLLAMA_BASE_URL')}")
     logger.info(f"🚀 Groq API: {'Configured' if os.getenv('GROQ_API_KEY') else 'NOT CONFIGURED'}")
+    # Apply create-table and additive SQLite migrations before accepting scans.
+    # Without this, a deployed database created by an earlier release may not
+    # contain new finding columns when the background pipeline starts writing.
+    init_db()
     
     yield  # App runs here
     

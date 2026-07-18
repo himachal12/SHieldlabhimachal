@@ -23,9 +23,32 @@ from app.agents.auto_pr import (
     _build_pr_description,
     _replace_with_context,
     _run_project_tests,
+    _validate_full_file_regression,
     _validate_vulnerability_fix,
     _validate_python_patch,
 )
+
+
+def test_full_file_secret_regression_rejects_duplicate_assignment():
+    valid, detail = _validate_full_file_regression({
+        "vuln_type": "Hardcoded Secrets",
+        "repository_relative_path": "settings.py",
+        "vulnerable_code": 'SECRET_KEY = "exposed"',
+    }, 'SECRET_KEY = os.environ["SECRET_KEY"]\nSECRET_KEY = os.environ["SECRET_KEY"]\n')
+
+    assert valid is False
+    assert detail["checks"]["single_secret_assignment"] == "failed"
+
+
+def test_full_file_secret_regression_requires_detector_to_clear():
+    valid, detail = _validate_full_file_regression({
+        "vuln_type": "Hardcoded Secrets",
+        "repository_relative_path": "settings.py",
+        "vulnerable_code": 'SECRET_KEY = "exposed"',
+    }, 'SECRET_KEY = os.environ["SECRET_KEY"]\nAPI_TOKEN = "still-exposed"\n')
+
+    assert valid is True
+    assert detail["checks"]["detector_rescan"] == "passed"
 
 
 def test_valid_python_patch_is_compiled(tmp_path):
@@ -112,6 +135,28 @@ def test_multiline_replacement_preserves_source_indentation():
         "def get_user(name):\n"
         "    query = \"SELECT * FROM users WHERE username = ?\"\n"
         "    cursor.execute(query, (name,))\n"
+    )
+
+
+def test_multiline_replacement_preserves_nested_indentation():
+    content = "def redirect_user():\n    return redirect(request.args.get('url'))\n"
+
+    candidate, error = _replace_with_context(
+        content,
+        "return redirect(request.args.get('url'))",
+        "target = request.args.get('url', '/')\n"
+        "if not target.startswith('/') or target.startswith('//'):\n"
+        "    target = '/'\n"
+        "return redirect(target)",
+    )
+
+    assert error is None
+    assert candidate == (
+        "def redirect_user():\n"
+        "    target = request.args.get('url', '/')\n"
+        "    if not target.startswith('/') or target.startswith('//'):\n"
+        "        target = '/'\n"
+        "    return redirect(target)\n"
     )
 
 
@@ -345,5 +390,5 @@ def test_manual_review_pushes_a_valid_fix_only_after_local_validation(monkeypatc
 
     assert result["success"] is True
     assert repo.branch_created is True
-    assert repo.updated_content == 'SECRET = os.environ.get("SECRET")\n'
+    assert repo.updated_content == 'import os\nSECRET = os.environ.get("SECRET")\n'
     assert result["validation_details"][-1]["status"] == "tests_not_available"

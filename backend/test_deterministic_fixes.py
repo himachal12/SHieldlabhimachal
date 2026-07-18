@@ -75,4 +75,31 @@ def test_secret_without_an_existing_os_import_adds_a_safe_stdlib_import(tmp_path
         "file_path": str(source),
     })
 
-    assert result["fixed_code"] == 'import os\nAPI_KEY = os.environ["API_KEY"]'
+    assert result["fixed_code"] == 'API_KEY = os.environ["API_KEY"]'
+
+
+def test_sql_fix_replaces_query_and_execute_together(tmp_path):
+    source = tmp_path / "app.py"
+    source.write_text(
+        "def get_user(user_id):\n"
+        "    query = f\"SELECT * FROM users WHERE id = {user_id}\"\n"
+        "    cursor.execute(query)\n",
+        encoding="utf-8",
+    )
+
+    result = deterministic_fix({
+        "vuln_type": "SQL Injection",
+        "vulnerable_code": 'query = f"SELECT * FROM users WHERE id = {user_id}"',
+        "file_path": str(source),
+        "line_number": 2,
+    })
+
+    assert result["vulnerable_code"] == (
+        '    query = f"SELECT * FROM users WHERE id = {user_id}"\n'
+        "    cursor.execute(query)"
+    )
+    assert result["fixed_code"] == (
+        '    query = "SELECT * FROM users WHERE id = ?"\n'
+        "    cursor.execute(query, (user_id,))"
+    )
+    assert result["fix_source"] == "deterministic"
