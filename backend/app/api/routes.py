@@ -168,6 +168,28 @@ async def scan_combined(
 
 
 # ──────────────────────────────────────────────
+# THREAT INTELLIGENCE
+# ──────────────────────────────────────────────
+
+@router.get("/threat-intel", response_model=schemas.ThreatIntelResponse)
+async def get_threat_intel(
+    severity: str = "CRITICAL",
+    days: int = 7,
+    limit: int = 10,
+    ai: bool = True,
+):
+    """Return recent CVE intelligence for the Threat Radar page."""
+    from app.threat_intel import get_threat_intel as load_threat_intel
+
+    return load_threat_intel(
+        severity=severity,
+        days=days,
+        limit=limit,
+        ai=ai,
+    )
+
+
+# ──────────────────────────────────────────────
 # STATUS + RESULTS
 # ──────────────────────────────────────────────
 

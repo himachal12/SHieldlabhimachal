@@ -55,4 +55,7 @@ export const getScanResults = (scanId) =>
 export const getHealth = () =>
   api.get('/health')
 
+export const getThreatIntel = (params = {}) =>
+  api.get('/threat-intel', { params })
+
 export default api
