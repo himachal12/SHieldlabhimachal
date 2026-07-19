@@ -12,6 +12,7 @@ import {
   LockKeyhole,
   RadioTower,
   Shield,
+  Radar,
   Zap
 } from 'lucide-react'
 import { startCodeScan, startWebScan, startCombinedScan } from '../api/client'
@@ -176,6 +177,36 @@ export default function Home() {
             Launch code, web, and AI attack-chain scans from a dark cyber console built for fast vulnerability triage and remediation.
           </p>
         </div>
+
+        <button
+          onClick={() => navigate('/threat-radar')}
+          className="group cyber-command-panel w-full max-w-5xl overflow-hidden p-5 text-left transition-all hover:-translate-y-1 hover:border-cyan-300/30 hover:shadow-glow-cyan sm:p-6"
+        >
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-start gap-4">
+              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl border border-cyan-300/20 bg-cyan-300/10 text-cyan-200 shadow-glow-cyan">
+                <Radar size={26} />
+              </div>
+              <div>
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <p className="cyber-label text-cyan-300/80">Global threat pulse</p>
+                  <span className="rounded-full border border-rose-300/25 bg-rose-500/10 px-2.5 py-1 text-[10px] font-black tracking-widest text-rose-100">NEW</span>
+                </div>
+                <h2 className="text-2xl font-black text-white">Open Threat Radar</h2>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
+                  Monitor recent critical CVEs, read AI-assisted developer impact summaries, and decide what deserves immediate stack review.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs lg:justify-end">
+              {['NVD feed', 'CVSS', 'AI summaries', 'Critical CVEs'].map(item => (
+                <span key={item} className="rounded-full border border-cyan-300/15 bg-cyan-300/5 px-3 py-1 font-semibold text-cyan-100/90">
+                  {item}
+                </span>
+              ))}
+            </div>
+          </div>
+        </button>
 
         <div className="cyber-command-panel w-full max-w-5xl p-5 sm:p-6 lg:p-8">
           <div className="mb-6 flex flex-col gap-4 border-b border-white/10 pb-6 lg:flex-row lg:items-center lg:justify-between">

@@ -317,6 +317,37 @@ class ResultsResponse(BaseModel):
         from_attributes = True
 
 
+class ThreatIntelItem(BaseModel):
+    """Normalized CVE item shown in Threat Radar."""
+
+    cve_id: str
+    severity: str
+    cvss_score: Optional[float] = None
+    published: Optional[str] = None
+    last_modified: Optional[str] = None
+    description: str
+    affected_keywords: List[str] = Field(default_factory=list)
+    cvss_vector: Optional[str] = None
+    source_url: str
+    why_this_matters: str
+    recommended_action: str
+    ai_enriched: bool = False
+
+
+class ThreatIntelResponse(BaseModel):
+    """Threat Radar feed response."""
+
+    source: str
+    source_url: str
+    updated_at: str
+    severity: str
+    days: int
+    count: int
+    cached: bool = False
+    warning: Optional[str] = None
+    items: List[ThreatIntelItem] = Field(default_factory=list)
+
+
 class HealthResponse(BaseModel):
     """Health check response"""
 
