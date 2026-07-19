@@ -1,4 +1,4 @@
-# 🛡️ ShieldLabs — AI Security Command Center
+ 🛡️ ShieldLabs — AI Security Command Center
 
 > **From scattered vulnerability alerts to prioritized attack paths and remediation pull requests.**
 
@@ -8,7 +8,7 @@ It is designed for teams who do not just want a list of vulnerabilities — they
 
 ---
 
-## 🚀 The 30-second pitch
+🚀 The 30-second pitch
 
 Most security scanners overwhelm developers with isolated findings. ShieldLabs turns those findings into a decision-ready workflow:
 
@@ -23,9 +23,9 @@ Most security scanners overwhelm developers with isolated findings. ShieldLabs t
 
 ---
 
-## ✨ Why judges should care
+✨ Why judges should care
 
-### 🔥 A better security story than “we found bugs”
+🔥 A better security story than “we found bugs”
 
 Traditional scanners answer: **“What is wrong?”**
 
