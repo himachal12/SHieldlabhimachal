@@ -297,15 +297,9 @@ THREAT_INTEL_CACHE_TTL_SECONDS=1800
 NUCLEI_PATH=/path/to/nuclei
 SQLMAP_PATH=/path/to/sqlmap.py
 SQLMAP_PYTHON=python3
-
-# Active scan safety and limits
-DEFAULT_SCAN_MODE=passive
-SQLMAP_MAX_REQUESTS=50
-ACTIVE_SCAN_CONSENT_MESSAGE=Active scanning uses real attack payloads. Only scan systems you own or have explicit written permission to test.
-
-# Scan timeouts
-SCAN_TIMEOUT=600
-NMAP_TIMEOUT=60
+DATABASE_URL=sqlite:///./shieldlabs.db
+NVD_API_KEY=your_optional_nvd_key
+THREAT_INTEL_CACHE_TTL_SECONDS=1800
 ```
 
 ### Frontend
