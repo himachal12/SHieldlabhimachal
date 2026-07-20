@@ -8,7 +8,7 @@ Coded , Debugged , Maintained by Codex AND kaalvex.
 
 > From scattered vulnerability alerts to prioritized attack paths and remediation pull requests.
 
-ShieldLabs is a hackathon-built security platform that scans source code and live web attack surface, reasons about real-world exploitability with AI, connects findings into cross-domain attack chains, and helps developers ship fixes through validated Auto-PRs.
+ShieldLabs is a hackathon-built AI security command center that unifies source-code security review, live web attack-surface reconnaissance, global CVE threat intelligence, exploitability reasoning, cross-domain attack-chain analysis, and validation-aware remediation pull requests. It started as a scanner, but it has grown into a local-first security workflow assistant that helps teams discover risk, understand attacker paths, track external threats, and ship safer fixes without sending their private codebase to a hosted SaaS platform.
 
 It is designed for teams who do not just want a list of vulnerabilities — they want to know **what can actually be exploited first, why it matters, and how to fix it fast**.
 
@@ -28,16 +28,17 @@ Most security scanners overwhelm developers with isolated findings. ShieldLabs t
 
 1. **Scan code** for insecure patterns and framework-level weaknesses.
 2. **Scan web targets** for exposed services, misconfigurations, weak headers, SSL/TLS issues, exposed files, Nuclei findings, and optional consent-based SQLMap checks.
-3. **Score exploitability** with AI-assisted CVSS reasoning.
-4. **Connect vulnerabilities** into cross-domain attack chains that show how code bugs and exposed web assets compound.
-5. **Generate fixes** using deterministic patches, LLM proposals, and static remediation guides.
-6. **Open remediation PRs** only after local validation checks pass.
+3. **Track global threats** with a Threat Radar that pulls recent CVEs from the NVD CVE API, filters by severity and time window, caches results, and adds AI-assisted developer impact summaries when configured.
+4. **Score exploitability** with AI-assisted CVSS reasoning.
+5. **Connect vulnerabilities** into cross-domain attack chains that show how code bugs and exposed web assets compound.
+6. **Generate fixes** using deterministic patches, LLM proposals, and static remediation guides.
+7. **Open remediation PRs** only after local validation checks pass.
 
 > **Core differentiator:** ShieldLabs does not stop at detection. It moves from **finding → reasoning → prioritization → remediation → pull request**.
 
 ---
 
-SHIELDLABS ISNT A SCANNER , ITS A " autonomous security engineer that finds the attack path, calculates the actual business risk, and submits the patch before the CI/CD pipeline fails."
+SHIELDLABS ISNT JUST A SCANNER , ITS AN "autonomous security command center" — an AI security engineer that watches the threat landscape, scans code and attack surface, finds the attack path, calculates the actual business risk, and submits the patch before the CI/CD pipeline fails.
 
 ✨ Why judges should care
 
@@ -60,6 +61,7 @@ ShieldLabs uses AI for the high-context decisions that static tools struggle wit
 - Exploitability reasoning
 - CVSS scoring support
 - Cross-domain attack-chain analysis
+- Threat-intelligence summarization for recent CVEs
 - Developer-friendly fix explanations
 - Bounded remediation proposals
 
@@ -140,7 +142,21 @@ In furure i am planning to introduce the :  XSS Scanner (Active)
 
 
 
-### 4. Watch live scan telemetry
+### 4. Monitor the Threat Radar before or after scans
+
+ShieldLabs now includes a dedicated Threat Radar page that can:
+
+- Fetch recent CVEs from the public NVD CVE API 2.0
+- Filter by critical, high, medium, or all severities
+- Compare 1-day, 7-day, and 30-day windows
+- Search CVE ID, product/vendor keywords, descriptions, impact notes, and recommended actions
+- Sort by CVSS score or newest publication date
+- Cache threat-feed responses to reduce repeated API calls
+- Add AI-assisted summaries that explain why a CVE matters to developers and what action to take next
+
+This means ShieldLabs is not only looking at the target you scan — it also helps teams keep an eye on the outside vulnerability landscape that may affect their stack.
+
+### 5. Watch live scan telemetry
 
 The frontend polls backend progress and displays:
 
@@ -150,7 +166,7 @@ The frontend polls backend progress and displays:
 - Success/failure state
 - Human-readable scan status
 
-### 5. Review the security intelligence report
+### 6. Review the security intelligence report
 
 The results page provides:
 
@@ -162,7 +178,7 @@ The results page provides:
 - Expandable finding cards
 - Attack-chain cards with evidence, impact, reasoning, and recommended fix order
 
-### 6. Create an Auto-Fix Pull Request
+### 7. Create an Auto-Fix Pull Request
 
 For eligible code findings, ShieldLabs can:
 
@@ -179,14 +195,14 @@ For eligible code findings, ShieldLabs can:
 
 | Category | Features |
 | --- | --- |
-| **Backend API** | FastAPI scan endpoints, status polling, results retrieval, Auto-PR endpoint, health checks |
-| **Code security** | Bandit integration, hardcoded secret detection, weak JWT checks, XSS patterns, CSRF checks, missing security headers, missing rate limiting, unvalidated redirects |
+| **Backend API** | FastAPI scan endpoints, status polling, results retrieval, Threat Radar endpoint, Auto-PR endpoint, health checks |
+| **Code security** | Bandit integration, AST-assisted parsing, custom pattern detection, semantic false-positive review, hardcoded secret detection, weak JWT checks, XSS patterns, CSRF checks, SQL injection, command injection, insecure deserialization, weak cryptography, missing security headers, missing rate limiting, unvalidated redirects |
 | **Web security** | Port scan orchestration, exposed file checks, SSL/TLS analysis, security header checks, optional Nuclei, consent-based SQLMap |
-| **AI reasoning** | Groq-backed exploitability assessment, CVSS scoring, cross-domain attack-chain generation |
+| **AI reasoning** | Groq/Ollama-backed exploitability assessment, CVSS scoring, semantic false-positive review, cross-domain attack-chain generation, Threat Radar CVE summaries |
 | **Remediation** | Static guides, deterministic fixes, LLM-generated bounded fixes, remediation status tracking, patch provenance |
 | **Auto-PR** | GitHub integration, eligible-finding filtering, local validation, manual-review fallback, PR creation |
-| **Frontend** | Cyber command UI, scan setup, active-scan consent panel, live progress, findings dashboard, charts, attack-chain visualization, Auto-PR panel |
-| **Persistence** | SQLite/SQLAlchemy models for scans, findings, reports, and attack chains |
+| **Frontend** | Cyber command UI, scan setup, Threat Radar, active-scan consent panel, live progress, executive report dashboard, search/filter/sort controls, severity charts, attack-chain visualization, Auto-PR panel |
+| **Persistence** | SQLite/SQLAlchemy models and additive startup migrations for scans, findings, reports, and attack chains |
 | **Testing** | Pytest coverage for scanner logic, deterministic fixes, SQLMap runner, cross-domain analysis, patch provenance, Auto-PR validation, and pipeline behavior |
 
 ---
@@ -196,6 +212,7 @@ For eligible code findings, ShieldLabs can:
 ```text
 frontend/ React + Vite
   ├─ Scan console
+  ├─ Threat Radar
   ├─ Live progress UI
   ├─ Results dashboard
   ├─ Attack-chain visualization
@@ -203,6 +220,7 @@ frontend/ React + Vite
 
 backend/ FastAPI
   ├─ API routes
+  ├─ Threat intelligence feed
   ├─ Scan pipeline orchestrator
   ├─ Code scanners
   ├─ Web scanners
@@ -226,6 +244,7 @@ backend/ FastAPI
 │   │   ├── utils/               # LLM, repo, logging, rate limit helpers
 │   │   ├── database.py          # SQLAlchemy models and migrations
 │   │   ├── pipeline.py          # End-to-end scan orchestration
+│   │   ├── threat_intel.py      # NVD CVE feed + optional AI summaries
 │   │   └── schemas.py           # Pydantic API contracts
 │   ├── requirements.txt
 │   └── test_*.py                # Backend tests
@@ -264,6 +283,8 @@ NUCLEI_PATH=/path/to/nuclei
 SQLMAP_PATH=/path/to/sqlmap.py
 SQLMAP_PYTHON=python3
 DATABASE_URL=sqlite:///./shieldlabs.db
+NVD_API_KEY=your_optional_nvd_key
+THREAT_INTEL_CACHE_TTL_SECONDS=1800
 ```
 
 ### Frontend
@@ -366,6 +387,7 @@ These limitations are intentional tradeoffs for speed, demo clarity, and safety 
 - GitHub App installation flow instead of personal access tokens
 - SARIF export for GitHub Advanced Security compatibility
 - PDF/HTML executive reports
+- Threat Radar correlation against scanned dependency manifests and repository technologies
 - Container and dependency vulnerability scanning
 - Authenticated web scanning
 - Team dashboards and historical risk trends
