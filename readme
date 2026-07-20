@@ -273,12 +273,27 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Optional environment variables:
+> **Important for judges:** the real `.env` file is intentionally **not committed** because it can contain API keys, scanner paths, local database URLs, and deployment-specific settings. The example below documents what the backend can read so reviewers understand the runtime requirements without exposing secrets or machine-specific paths. Replace the placeholder values with your own local values when running ShieldLabs.
 
 ```bash
-GROQ_API_KEY=your_groq_key
+# App metadata
+APP_NAME=ShieldLabs
+APP_VERSION=1.0.0
+DEBUG=True
+
+# Database
+DATABASE_URL=sqlite:///./shieldlabs.db
+
+# AI providers
+GROQ_API_KEY=your_groq_key_here
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=qwen2.5-coder:7b
+
+# Threat Radar / NVD CVE feed
+NVD_API_KEY=your_optional_nvd_key_here
+THREAT_INTEL_CACHE_TTL_SECONDS=1800
+
+# Optional external scanner tools
 NUCLEI_PATH=/path/to/nuclei
 SQLMAP_PATH=/path/to/sqlmap.py
 SQLMAP_PYTHON=python3
@@ -364,6 +379,27 @@ The platform combines:
 - The clarity of attack-chain prioritization
 
 In a real engineering team, this means less time arguing over scanner noise and more time fixing the vulnerabilities that actually reduce risk.
+
+---
+
+## 🤝 How I collaborated with Codex
+
+ShieldLabs was built from the root by **Himachal Paudel / kaalvex** — from the original idea, product direction, architecture, workflow, security story, and demo experience. It was not just an existing scanner with a few features added on top. The goal from the beginning was to create a complete AI security command center that could move from discovery to reasoning to prioritized remediation.
+
+My key decisions shaped the product:
+
+- Designing ShieldLabs as a **local-first enterprise tool**, so a company's private codebase can stay inside its own system and network.
+- Expanding the project beyond basic scanning into code scanning, web reconnaissance, AI severity reasoning, Threat Radar, cross-domain attack chains, and Auto-PR remediation.
+- Choosing the three main scan workflows: **Code Scan**, **Web Scan**, and **Combined Scan**.
+- Making passive reconnaissance the safe default while keeping active SQLMap testing behind explicit consent.
+- Planning a future domain-ownership verification lock using DNS TXT records or hosted verification files before active scans are unlocked.
+- Prioritizing developer usefulness: clear findings, CVSS context, attack-path explanation, fix suggestions, validation details, and pull requests instead of only raw alerts.
+
+Codex helped accelerate the engineering workflow as an AI pair-programming partner. It helped turn the architecture into working code faster by assisting with FastAPI routes, scan orchestration, React/Vite UI components, scanner integrations, database persistence, bug fixing, tests, documentation, and repeated refactoring. Codex was especially useful for connecting many moving parts together — backend APIs, background scan pipelines, code scanners, web scanners, AI reasoning agents, frontend dashboards, Threat Radar, and Auto-PR validation — into one runnable prototype.
+
+GPT-5.6 and Codex contributed by helping translate my product decisions into implementation details, suggesting safer structures, speeding up debugging, generating validation checks, improving documentation, and polishing the final demo workflow. The collaboration was not "AI generated an idea and I used it"; it was a builder workflow where I defined the vision and made the key product, engineering, and design decisions, while Codex acted like a high-speed implementation partner.
+
+This collaboration is one reason ShieldLabs became larger than a normal solo hackathon scanner. With Codex accelerating coding and debugging, I was able to focus on the bigger security workflow: **find the risk, understand the attack path, decide what matters first, and ship a safer fix**.
 
 ---
 
