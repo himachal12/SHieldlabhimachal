@@ -5,7 +5,7 @@ Coded , Debugged , Maintained by Codex AND kaalvex.
                           -without codex this entire complex architecture and working prototype is really unimaginable and Almost very impossible for a solo dveloper like me and even for any team ..
 
 
-🤝 How I collaborated with Codex
+**🤝 How I collaborated with Codex**
 
 ShieldLabs was built from the root by **Himachal Paudel / kaalvex** — from the original idea, product direction, architecture, workflow, security story, and demo experience. It was not just an existing scanner with a few features added on top. The goal from the beginning was to create a complete AI security command center that could move from discovery to reasoning to prioritized remediation.
 
@@ -18,16 +18,19 @@ My key decisions shaped the product:
 - Planning a future domain-ownership verification lock using DNS TXT records or hosted verification files before active scans are unlocked.
 - Prioritizing developer usefulness: clear findings, CVSS context, attack-path explanation, fix suggestions, validation details, and pull requests instead of only raw alerts.
 
-Codex helped accelerate the engineering workflow as an AI pair-programming partner. It helped turn the architecture into working code faster by assisting with FastAPI routes, scan orchestration, React/Vite UI components, scanner integrations, database persistence, bug fixing, tests, documentation, and repeated refactoring. Codex was especially useful for connecting many moving parts together — backend APIs, background scan pipelines, code scanners, web scanners, AI reasoning agents, frontend dashboards, Threat Radar, and Auto-PR validation — into one runnable prototype.
+**Codex helped accelerate the engineering workflow as an AI pair-programming partner. It helped turn the architecture into working code faster by assisting with FastAPI routes, scan orchestration, React/Vite UI components, scanner integrations, database persistence, bug fixing, tests, documentation, and repeated refactoring. Codex was especially useful for connecting many moving parts together — backend APIs, background scan pipelines, code scanners, web scanners, AI reasoning agents, frontend dashboards, Threat Radar, and Auto-PR validation — into one runnable prototype.**
 
-GPT-5.6 and Codex contributed by helping translate my product decisions into implementation details, suggesting safer structures, speeding up debugging, generating validation checks, improving documentation, and polishing the final demo workflow. The collaboration was not "AI generated an idea and I used it"; it was a builder workflow where I defined the vision and made the key product, engineering, and design decisions, while Codex acted like a high-speed implementation partner.
+**GPT-5.6 and Codex contributed by helping translate my product decisions into implementation details, suggesting safer structures, speeding up debugging, generating validation checks, improving documentation, and polishing the final demo workflow. The collaboration was not "AI generated an idea and I used it"; it was a builder workflow where I defined the vision and made the key product, engineering, and design decisions, while Codex acted like a high-speed implementation partner.**
 
 This collaboration is one reason ShieldLabs became larger than a normal solo hackathon scanner. With Codex accelerating coding and debugging, I was able to focus on the bigger security workflow: **find the risk, understand the attack path, decide what matters first, and ship a safer fix**.
 
 ---
 
+**for Using the scanner u will need vulnerable app github repo and for web scan u will ned the github repo link that have the vulnerability and for web scan u will need domian , for the url run this in local server after u clone the repo in local host**
 
-
+vulnerable link = https://github.com/himachal12/gov_app_vulnerabality
+for the first scanner u will need this link and for the web scan and full scan u will need the url also so u need to clone this repo and run it in the local host by turning the virtual environment ..
+and  when u run u will get the local host libnk and also the parameter for the active scan something like  http://localhost:5000/tenders?tender_id=1  , u need to paste this parameter in the active scan adding box ..  (localhost link might be diff , u will get this in the ternminal ")
 
 
 
